@@ -2,7 +2,7 @@
 // @id            photoshop-dark-menus
 // @name          Photoshop Dark Menus
 // @description   Enables dark mode and custom separator colors for all menus in Adobe Photoshop.
-// @version       1.1
+// @version       1.1.0
 // @author        Saber Naeemi
 // @github        https://github.com/sabergraphics
 // @twitter       https://x.com/SaberNaeemi
@@ -39,8 +39,11 @@ Forces dark mode for all context and top menu bar dropdowns in Adobe Photoshop w
   $name: "Menu Text Color"
 - HighlightBgColor: "#505050"
   $name: "Highlight Background Color"
+- HighlightTextColor: "#FFFFFF"
+  $name: "Highlight Text Color"
 - SeparatorColor: "#383838"
-  $name: "Separator Line Color (Set same as Menu Background Color to hide)"
+  $name: "Separator Line Color"
+  $description: "Set this to the menu background color to hide separators."
 - GrayTextColor: "#808080"
   $name: "Disabled Text Color"
 */
@@ -48,6 +51,7 @@ Forces dark mode for all context and top menu bar dropdowns in Adobe Photoshop w
 
 #include <windows.h>
 #include <windhawk_api.h>
+#include <windhawk_utils.h>
 #include <wchar.h>
 
 constexpr int NUM_ELEMENTS = 10;
@@ -81,7 +85,6 @@ COLORREF ParseHexColor(const PCWSTR hexStr, COLORREF defaultColor) {
     return defaultColor;
 }
 
-// Safely fetches the true system colors from the registry, bypassing corrupted memory
 COLORREF GetColorFromRegistry(int sysElement, COLORREF liveColorFallback) {
     const wchar_t* valueName = nullptr;
     switch (sysElement) {
@@ -117,7 +120,6 @@ COLORREF GetColorFromRegistry(int sysElement, COLORREF liveColorFallback) {
 
 void SaveOriginalColors() {
     if (g_hasSavedOrigColors) return;
-
     for (int i = 0; i < NUM_ELEMENTS; i++) {
         g_origColors[i] = GetColorFromRegistry(g_sysElements[i], GetSysColor(g_sysElements[i]));
     }
@@ -127,39 +129,28 @@ void SaveOriginalColors() {
 void ApplyDarkSystemColors() {
     SaveOriginalColors();
 
-    const PCWSTR bgStr        = Wh_GetStringSetting(L"MenuBgColor");
-    const PCWSTR textStr      = Wh_GetStringSetting(L"MenuTextColor");
-    const PCWSTR highlightStr = Wh_GetStringSetting(L"HighlightBgColor");
-    const PCWSTR sepStr       = Wh_GetStringSetting(L"SeparatorColor");
-    const PCWSTR grayStr      = Wh_GetStringSetting(L"GrayTextColor");
-
-    COLORREF colMenu      = ParseHexColor(bgStr,        RGB(40, 40, 40));
-    COLORREF colText      = ParseHexColor(textStr,      RGB(220, 220, 220));
-    COLORREF colHighlight = ParseHexColor(highlightStr, RGB(80, 80, 80));
-    COLORREF colSep       = ParseHexColor(sepStr,       RGB(56, 56, 56));
-    COLORREF colGray      = ParseHexColor(grayStr,      RGB(128, 128, 128));
-
-    Wh_FreeStringSetting(bgStr);
-    Wh_FreeStringSetting(textStr);
-    Wh_FreeStringSetting(highlightStr);
-    Wh_FreeStringSetting(sepStr);
-    Wh_FreeStringSetting(grayStr);
+    COLORREF colMenu      = ParseHexColor(WindhawkUtils::StringSetting::make(L"MenuBgColor").get(), RGB(40, 40, 40));
+    COLORREF colText      = ParseHexColor(WindhawkUtils::StringSetting::make(L"MenuTextColor").get(), RGB(220, 220, 220));
+    COLORREF colHighlight = ParseHexColor(WindhawkUtils::StringSetting::make(L"HighlightBgColor").get(), RGB(80, 80, 80));
+    COLORREF colHiText    = ParseHexColor(WindhawkUtils::StringSetting::make(L"HighlightTextColor").get(), RGB(255, 255, 255));
+    COLORREF colSep       = ParseHexColor(WindhawkUtils::StringSetting::make(L"SeparatorColor").get(), RGB(56, 56, 56));
+    COLORREF colGray      = ParseHexColor(WindhawkUtils::StringSetting::make(L"GrayTextColor").get(), RGB(128, 128, 128));
 
     HBRUSH hNewSepBrush = CreateSolidBrush(colSep);
     HBRUSH hOldSepBrush = (HBRUSH)InterlockedExchangePointer((PVOID*)&g_hSeparatorBrush, hNewSepBrush);
     if (hOldSepBrush) DeleteObject(hOldSepBrush);
 
     COLORREF darkColors[NUM_ELEMENTS] = {
-        colMenu,
-        colText,
-        colHighlight,
-        RGB(255, 255, 255),
-        colMenu,
-        colGray,
-        colMenu,
-        colMenu,
-        colMenu,
-        colMenu
+        colMenu,      // COLOR_MENU
+        colText,      // COLOR_MENUTEXT
+        colHighlight, // COLOR_HIGHLIGHT
+        colHiText,    // COLOR_HIGHLIGHTTEXT
+        colMenu,      // COLOR_BTNSHADOW
+        colGray,      // COLOR_GRAYTEXT
+        colMenu,      // COLOR_BTNHIGHLIGHT
+        colMenu,      // COLOR_3DDKSHADOW
+        colMenu,      // COLOR_3DLIGHT
+        colMenu       // COLOR_MENUBAR
     };
 
     SetSysColors(NUM_ELEMENTS, g_sysElements, darkColors);
@@ -169,23 +160,47 @@ void RestoreOriginalColors() {
     if (g_hasSavedOrigColors) {
         SetSysColors(NUM_ELEMENTS, g_sysElements, g_origColors);
     }
-    
     HBRUSH hOldBrush = (HBRUSH)InterlockedExchangePointer((PVOID*)&g_hSeparatorBrush, nullptr);
-    if (hOldBrush) {
-        DeleteObject(hOldBrush);
-    }
+    if (hOldBrush) DeleteObject(hOldBrush);
 }
 
 // -------------------------------------------------------------------------
 // Hooks
 // -------------------------------------------------------------------------
 
+// Safely determines if the drawing is happening for a menu, 
+// even if a memory DC (double-buffering) is being used.
+bool IsMenuContext(HDC hdc) {
+    HWND hWnd = WindowFromDC(hdc);
+    if (hWnd) {
+        // Direct drawing to a real window
+        WCHAR cls[16];
+        if (GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) && wcscmp(cls, L"#32768") == 0) {
+            return true;
+        }
+        return false;
+    } 
+    
+    // If hWnd is NULL, it is likely a Memory DC used for double-buffering.
+    // Check if the current thread is actively displaying a menu.
+    if (GetObjectType(hdc) == OBJ_MEMDC) {
+        GUITHREADINFO gti = { sizeof(GUITHREADINFO) };
+        if (GetGUIThreadInfo(GetCurrentThreadId(), &gti)) {
+            if (gti.flags & GUI_INMENUMODE) {
+                return true;
+            }
+        }
+    }
+    
+    return false;
+}
+
 using PatBlt_t = BOOL (WINAPI*)(HDC hdc, int x, int y, int w, int h, DWORD rop);
 PatBlt_t PatBlt_Original = nullptr;
 
 BOOL WINAPI PatBlt_Hook(HDC hdc, int x, int y, int w, int h, DWORD rop) {
     HBRUSH hBrush = g_hSeparatorBrush; 
-    if ((h == 1 || h == 2) && w > 20 && hBrush) {
+    if (rop == PATCOPY && (h == 1 || h == 2) && w > 20 && hBrush && IsMenuContext(hdc)) {
         HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hBrush);
         BOOL bRes = PatBlt_Original(hdc, x, y, w, h, rop);
         SelectObject(hdc, hOldBrush);
@@ -199,7 +214,7 @@ FillRect_t FillRect_Original = nullptr;
 
 int WINAPI FillRect_Hook(HDC hdc, const RECT *lprc, HBRUSH hbr) {
     HBRUSH hBrush = g_hSeparatorBrush; 
-    if (lprc && hBrush) {
+    if (lprc && hBrush && IsMenuContext(hdc)) {
         int h = lprc->bottom - lprc->top;
         int w = lprc->right - lprc->left;
         if ((h == 1 || h == 2) && w > 20) {
@@ -209,12 +224,10 @@ int WINAPI FillRect_Hook(HDC hdc, const RECT *lprc, HBRUSH hbr) {
     return FillRect_Original(hdc, lprc, hbr);
 }
 
-// Intercept application exit to restore colors safely
 using ExitProcess_t = void (WINAPI*)(UINT uExitCode);
 ExitProcess_t ExitProcess_Original = nullptr;
 
 void WINAPI ExitProcess_Hook(UINT uExitCode) {
-    Wh_Log(L"Photoshop is exiting, restoring original system colors...");
     RestoreOriginalColors();
     ExitProcess_Original(uExitCode);
 }
@@ -228,7 +241,6 @@ void Wh_ModSettingsChanged() {
 }
 
 BOOL Wh_ModInit() {
-    Wh_Log(L"Initializing Photoshop Dark Menus");
     ApplyDarkSystemColors();
 
     HMODULE hGdi32 = GetModuleHandleW(L"gdi32.dll");
@@ -253,6 +265,5 @@ BOOL Wh_ModInit() {
 }
 
 void Wh_ModUninit() {
-    Wh_Log(L"Restoring original system palette colors");
     RestoreOriginalColors();
 }
