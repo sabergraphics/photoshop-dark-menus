@@ -4,6 +4,9 @@
 // @description   Enables dark mode and custom separator colors for all menus in Adobe Photoshop.
 // @version       1.2.0
 // @author        Saber Naeemi
+// @github        https://github.com/sabergraphics
+// @twitter       https://x.com/SaberNaeemi
+// @homepage      https://www.sabernaeemi.com
 // @include       Photoshop.exe
 // @compilerOptions -lUser32 -lGdi32 -lAdvapi32
 // ==/WindhawkMod==
