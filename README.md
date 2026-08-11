@@ -1,14 +1,8 @@
 # Photoshop Dark Menus
 
-Enables dark mode and custom separator colors for all menus (top bar dropdowns and context menus) in Adobe Photoshop.
+This Windhawk mod enables dark menus (top-bar dropdowns and context menus) in Adobe Photoshop on Windows 11, along with custom color settings.
 
 This mod dynamically updates the active Windows session palette and intercepts GDI line drawing calls to force dark menu styling without making permanent modifications to registry keys on disk.
-
-## Features
-- **Full Dark Mode**: Applies dark backgrounds and customizable text colors to all Photoshop menus.
-- **Custom Separators**: Fine-tune or hide separator lines independently from disabled item text.
-- **Clean Text Rendering**: Maintains legible contrast for both enabled and disabled menu items.
-- **Non-Destructive**: Automatically restores default Windows system colors upon exiting Photoshop.
 
 ## Screenshots
 
