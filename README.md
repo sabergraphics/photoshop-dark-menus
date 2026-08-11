@@ -12,9 +12,11 @@ This mod dynamically updates the active Windows session palette and intercepts G
 
 ## Why a Standalone Mod?
 
-While the [Dark mode context menus](https://github.com/MGGSK/DarkMenus) (`dark-menus`) Windhawk mod provides system-wide dark Win32 menus, it does not function correctly for Photoshop due to how Adobe implements its legacy UI. This standalone mod was created out of necessity to address that gap.
+While the [Dark mode context menus](https://github.com/MGGSK/DarkMenus) (`dark-menus`) Windhawk mod provides system-wide dark Win32 menus, it does not function correctly for Photoshop due to how Adobe implements its legacy UI. This standalone mod was created out of necessity to address that gap, while offering two Photoshop-specific advantages:
 
-Photoshop draws its menu separators using legacy Win32 GDI functions (`PatBlt` and `FillRect`). To reliably color or hide these specific separators, this mod relies on targeted pixel-dimension heuristics. Merging these highly specific GDI hooks into a global, system-wide mod (`@include *`) would risk causing visual glitches and false-positive artifacts in other applications.
+1. Photoshop draws its menu separators using legacy Win32 GDI functions (`PatBlt` and `FillRect`). To reliably color or hide these specific separators, this mod relies on targeted pixel-dimension heuristics. Merging these highly specific GDI hooks into a global, system-wide mod (`@include *`) would risk causing visual glitches and false-positive artifacts in other applications.
+
+2. Because Photoshop relies on legacy Win32 standard menus for its top bar, which are drawn globally by the Windows kernel, normal user-mode color hooks fail to theme their backgrounds. This mod uses SetSysColors as the only way to successfully force the kernel to theme Photoshop's menus, but employs strict safeguards (including registry-backed color backups and ExitProcess teardown hooks) to ensure the changes only persist while Photoshop is actively running.
 
 ## Options
 The following settings can be customized in the Windhawk mod panel:
