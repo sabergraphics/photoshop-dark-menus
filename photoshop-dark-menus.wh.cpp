@@ -2,7 +2,7 @@
 // @id            photoshop-dark-menus
 // @name          Photoshop Dark Menus
 // @description   Enables dark mode and custom separator colors for all menus in Adobe Photoshop.
-// @version       1.3.0
+// @version       1.2.0
 // @author        Saber Naeemi
 // @github        https://github.com/sabergraphics
 // @twitter       https://x.com/SaberNaeemi
