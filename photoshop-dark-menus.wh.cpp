@@ -2,34 +2,50 @@
 // @id            photoshop-dark-menus
 // @name          Photoshop Dark Menus
 // @description   Enables dark mode and custom separator colors for all menus in Adobe Photoshop.
-// @version       1.1.0
+// @version       1.2.0
 // @author        Saber Naeemi
-// @github        https://github.com/sabergraphics
-// @twitter       https://x.com/SaberNaeemi
-// @homepage      https://www.sabernaeemi.com
 // @include       Photoshop.exe
 // @compilerOptions -lUser32 -lGdi32 -lAdvapi32
-// @license       MIT
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
 /*
 # Photoshop Dark Menus
 
-Forces dark mode for all context and top menu bar dropdowns in Adobe Photoshop without permanently altering registry keys on disk.
+This Windhawk mod enables dark menus (top-bar dropdowns and context menus) in Adobe Photoshop on Windows 11, along with custom color settings.
 
-### Features
-- Dark backgrounds and customizable text colors across all menus.
-- Independent separator line color control (set to match menu background to hide separators).
-- Legible disabled item text styling.
-- Automatic restoration of default Windows system colors upon exiting Photoshop.
+This mod dynamically updates the active Windows session palette and intercepts GDI line drawing calls to force dark menu styling without making permanent modifications to registry keys on disk.
 
-### Screenshots
-![Photoshop Dark Menu Dropdown](https://raw.githubusercontent.com/sabergraphics/photoshop-dark-menus/main/images/photoshop-dark-menu-screenshot-1.png)
+## Screenshots
 
-![Photoshop Dark Context Menu](https://raw.githubusercontent.com/sabergraphics/photoshop-dark-menus/main/images/photoshop-dark-menu-screenshot-2.png)
+![Top Bar Menu Dropdown](https://raw.githubusercontent.com/sabergraphics/photoshop-dark-menus/main/images/photoshop-dark-menu-screenshot-1.png)
+
+![Context Menu](https://raw.githubusercontent.com/sabergraphics/photoshop-dark-menus/main/images/photoshop-dark-menu-screenshot-2.png)
+
+## Why a Standalone Mod?
+
+While the [Dark mode context menus](https://github.com/MGGSK/DarkMenus) (`dark-menus`) Windhawk mod provides system-wide dark Win32 menus, it does not function correctly for Photoshop due to how Adobe implements its legacy UI. This standalone mod was created out of necessity to address that gap, while offering two Photoshop-specific advantages:
+
+1. Photoshop draws its menu separators using legacy Win32 GDI functions (`PatBlt` and `FillRect`). To reliably color or hide these specific separators, this mod strictly targets device contexts belonging to active menu windows (class `#32768` or modal `GUI_INMENUMODE`). Merging these highly specific, application-tailored GDI hooks into a global, system-wide mod (`@include *`) would risk causing visual glitches and false-positive artifacts in other applications.
+
+2. Because Photoshop relies on legacy Win32 standard menus for its top bar, which are drawn globally by the Windows kernel, normal user-mode color hooks fail to theme their backgrounds. This mod uses `SetSysColors` as the only way to successfully force the kernel to theme Photoshop's menus, but employs strict safeguards (including registry-backed color backups and `ExitProcess` teardown hooks) to ensure the changes only persist while Photoshop is actively running.
+
+## Important Note on Hard Crashes
+Because Photoshop's proprietary engine ignores standard Windows process-local theming, this mod relies on updating global Windows system colors to force the menus to be dark. The mod uses `ExitProcess` teardown hooks to safely restore your original system colors the moment you close the app. 
+
+However, if Photoshop experiences a **hard crash** (e.g., from a faulty plugin, or if you Force Quit it via Task Manager), normal exit routines are bypassed and your Windows desktop may remain in the dark color scheme. If this happens, simply launch Photoshop again and close it normally to immediately restore your original colors.
+
+## Options
+The following settings can be customized in the Windhawk mod panel:
+- **Menu Background Color**: Background color for all menu popups (Default: `#282828`).
+- **Menu Text Color**: Text color for active items (Default: `#DCDCDC`).
+- **Highlight Background Color**: Color when hovering over an item (Default: `#505050`).
+- **Highlight Text Color**: Text color when hovering over an item (Default: `#FFFFFF`).
+- **Separator Line Color**: Color for separator lines. Set to match the background color to hide them completely (Default: `#383838`).
+- **Disabled Text Color**: Text color for disabled menu items (Default: `#808080`).
 */
 // ==/WindhawkModReadme==
+
 
 // ==WindhawkModSettings==
 /*
@@ -43,7 +59,6 @@ Forces dark mode for all context and top menu bar dropdowns in Adobe Photoshop w
   $name: "Highlight Text Color"
 - SeparatorColor: "#383838"
   $name: "Separator Line Color"
-  $description: "Set this to the menu background color to hide separators."
 - GrayTextColor: "#808080"
   $name: "Disabled Text Color"
 */
@@ -53,35 +68,42 @@ Forces dark mode for all context and top menu bar dropdowns in Adobe Photoshop w
 #include <windhawk_api.h>
 #include <windhawk_utils.h>
 #include <wchar.h>
+#include <vector>
+#include <mutex>
 
 constexpr int NUM_ELEMENTS = 10;
-
 const INT g_sysElements[NUM_ELEMENTS] = {
-    COLOR_MENU,
-    COLOR_MENUTEXT,
-    COLOR_HIGHLIGHT,
-    COLOR_HIGHLIGHTTEXT,
-    COLOR_BTNSHADOW,
-    COLOR_GRAYTEXT,
-    COLOR_BTNHIGHLIGHT,
-    COLOR_3DDKSHADOW,
-    COLOR_3DLIGHT,
-    COLOR_MENUBAR
+    COLOR_MENU, COLOR_MENUTEXT, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT,
+    COLOR_BTNSHADOW, COLOR_GRAYTEXT, COLOR_BTNHIGHLIGHT, 
+    COLOR_3DDKSHADOW, COLOR_3DLIGHT, COLOR_MENUBAR
 };
 
 COLORREF g_origColors[NUM_ELEMENTS] = {};
 bool g_hasSavedOrigColors = false;
 
 HBRUSH g_hSeparatorBrush = nullptr;
+std::vector<HBRUSH> g_oldBrushes;
+std::mutex g_brushMutex;
 
 COLORREF ParseHexColor(const PCWSTR hexStr, COLORREF defaultColor) {
-    if (!hexStr || wcslen(hexStr) < 7 || hexStr[0] != L'#')
+    if (!hexStr) {
+        Wh_Log(L"ParseHexColor: Null string, using default.");
         return defaultColor;
-
-    unsigned int r = 0, g = 0, b = 0;
-    if (swscanf_s(hexStr + 1, L"%02x%02x%02x", &r, &g, &b) == 3) {
-        return RGB(r, g, b);
     }
+    
+    const wchar_t* p = hexStr;
+    if (*p == L'#') p++; // allow with or without #
+    
+    size_t len = wcslen(p);
+    unsigned int r, g, b;
+    
+    if (len == 6 && swscanf_s(p, L"%02x%02x%02x", &r, &g, &b) == 3) {
+        return RGB(r, g, b);
+    } else if (len == 3 && swscanf_s(p, L"%1x%1x%1x", &r, &g, &b) == 3) {
+        return RGB(r * 17, g * 17, b * 17); // expand short hex
+    }
+    
+    Wh_Log(L"ParseHexColor: Invalid format '%s', using default.", hexStr);
     return defaultColor;
 }
 
@@ -104,17 +126,23 @@ COLORREF GetColorFromRegistry(int sysElement, COLORREF liveColorFallback) {
         HKEY hKey;
         if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Colors", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
             wchar_t buffer[64] = {0};
-            DWORD bufferSize = sizeof(buffer);
-            if (RegQueryValueExW(hKey, valueName, nullptr, nullptr, (LPBYTE)buffer, &bufferSize) == ERROR_SUCCESS) {
-                int r, g, b;
-                if (swscanf_s(buffer, L"%d %d %d", &r, &g, &b) == 3) {
-                    RegCloseKey(hKey);
-                    return RGB(r, g, b);
+            DWORD bufferSize = sizeof(buffer) - sizeof(WCHAR); 
+            DWORD type = 0;
+            
+            if (RegQueryValueExW(hKey, valueName, nullptr, &type, (LPBYTE)buffer, &bufferSize) == ERROR_SUCCESS) {
+                if (type == REG_SZ) {
+                    buffer[bufferSize / sizeof(WCHAR)] = L'\0'; 
+                    int r, g, b;
+                    if (swscanf_s(buffer, L"%d %d %d", &r, &g, &b) == 3) {
+                        RegCloseKey(hKey);
+                        return RGB(r, g, b);
+                    }
                 }
             }
             RegCloseKey(hKey);
         }
     }
+    Wh_Log(L"Failed to read %s from registry. Falling back to live color.", valueName ? valueName : L"unknown");
     return liveColorFallback;
 }
 
@@ -138,19 +166,15 @@ void ApplyDarkSystemColors() {
 
     HBRUSH hNewSepBrush = CreateSolidBrush(colSep);
     HBRUSH hOldSepBrush = (HBRUSH)InterlockedExchangePointer((PVOID*)&g_hSeparatorBrush, hNewSepBrush);
-    if (hOldSepBrush) DeleteObject(hOldSepBrush);
+    
+    if (hOldSepBrush) {
+        std::lock_guard<std::mutex> lock(g_brushMutex);
+        g_oldBrushes.push_back(hOldSepBrush);
+    }
 
     COLORREF darkColors[NUM_ELEMENTS] = {
-        colMenu,      // COLOR_MENU
-        colText,      // COLOR_MENUTEXT
-        colHighlight, // COLOR_HIGHLIGHT
-        colHiText,    // COLOR_HIGHLIGHTTEXT
-        colMenu,      // COLOR_BTNSHADOW
-        colGray,      // COLOR_GRAYTEXT
-        colMenu,      // COLOR_BTNHIGHLIGHT
-        colMenu,      // COLOR_3DDKSHADOW
-        colMenu,      // COLOR_3DLIGHT
-        colMenu       // COLOR_MENUBAR
+        colMenu, colText, colHighlight, colHiText,
+        colMenu, colGray, colMenu, colMenu, colMenu, colMenu
     };
 
     SetSysColors(NUM_ELEMENTS, g_sysElements, darkColors);
@@ -160,110 +184,78 @@ void RestoreOriginalColors() {
     if (g_hasSavedOrigColors) {
         SetSysColors(NUM_ELEMENTS, g_sysElements, g_origColors);
     }
-    HBRUSH hOldBrush = (HBRUSH)InterlockedExchangePointer((PVOID*)&g_hSeparatorBrush, nullptr);
-    if (hOldBrush) DeleteObject(hOldBrush);
 }
 
-// -------------------------------------------------------------------------
-// Hooks
-// -------------------------------------------------------------------------
-
-// Safely determines if the drawing is happening for a menu, 
-// even if a memory DC (double-buffering) is being used.
 bool IsMenuContext(HDC hdc) {
     HWND hWnd = WindowFromDC(hdc);
     if (hWnd) {
-        // Direct drawing to a real window
         WCHAR cls[16];
-        if (GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) && wcscmp(cls, L"#32768") == 0) {
-            return true;
-        }
+        if (GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) && wcscmp(cls, L"#32768") == 0) return true;
         return false;
     } 
-    
-    // If hWnd is NULL, it is likely a Memory DC used for double-buffering.
-    // Check if the current thread is actively displaying a menu.
     if (GetObjectType(hdc) == OBJ_MEMDC) {
         GUITHREADINFO gti = { sizeof(GUITHREADINFO) };
         if (GetGUIThreadInfo(GetCurrentThreadId(), &gti)) {
-            if (gti.flags & GUI_INMENUMODE) {
-                return true;
-            }
+            if (gti.flags & GUI_INMENUMODE) return true;
         }
     }
-    
     return false;
 }
 
-using PatBlt_t = BOOL (WINAPI*)(HDC hdc, int x, int y, int w, int h, DWORD rop);
-PatBlt_t PatBlt_Original = nullptr;
-
+// Hooks
+decltype(&PatBlt) PatBlt_Original;
 BOOL WINAPI PatBlt_Hook(HDC hdc, int x, int y, int w, int h, DWORD rop) {
     HBRUSH hBrush = g_hSeparatorBrush; 
-    if (rop == PATCOPY && (h == 1 || h == 2) && w > 20 && hBrush && IsMenuContext(hdc)) {
-        HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hBrush);
-        BOOL bRes = PatBlt_Original(hdc, x, y, w, h, rop);
-        SelectObject(hdc, hOldBrush);
-        return bRes;
+    if (rop == PATCOPY && (h == 1 || h == 2) && w > 20 && hBrush) {
+        if (IsMenuContext(hdc)) {
+            HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hBrush);
+            BOOL bRes = PatBlt_Original(hdc, x, y, w, h, rop);
+            SelectObject(hdc, hOldBrush);
+            return bRes;
+        }
     }
     return PatBlt_Original(hdc, x, y, w, h, rop);
 }
 
-using FillRect_t = int (WINAPI*)(HDC hdc, const RECT *lprc, HBRUSH hbr);
-FillRect_t FillRect_Original = nullptr;
-
+decltype(&FillRect) FillRect_Original;
 int WINAPI FillRect_Hook(HDC hdc, const RECT *lprc, HBRUSH hbr) {
     HBRUSH hBrush = g_hSeparatorBrush; 
-    if (lprc && hBrush && IsMenuContext(hdc)) {
+    if (lprc && hBrush) {
         int h = lprc->bottom - lprc->top;
         int w = lprc->right - lprc->left;
         if ((h == 1 || h == 2) && w > 20) {
-            return FillRect_Original(hdc, lprc, hBrush);
+            if (IsMenuContext(hdc)) {
+                return FillRect_Original(hdc, lprc, hBrush);
+            }
         }
     }
     return FillRect_Original(hdc, lprc, hbr);
 }
 
-using ExitProcess_t = void (WINAPI*)(UINT uExitCode);
-ExitProcess_t ExitProcess_Original = nullptr;
-
-void WINAPI ExitProcess_Hook(UINT uExitCode) {
+decltype(&ExitProcess) ExitProcess_Original;
+__declspec(noreturn) void WINAPI ExitProcess_Hook(UINT uExitCode) {
     RestoreOriginalColors();
     ExitProcess_Original(uExitCode);
 }
 
-// -------------------------------------------------------------------------
 // Windhawk Events
-// -------------------------------------------------------------------------
-
-void Wh_ModSettingsChanged() {
-    ApplyDarkSystemColors();
-}
+void Wh_ModSettingsChanged() { ApplyDarkSystemColors(); }
 
 BOOL Wh_ModInit() {
     ApplyDarkSystemColors();
 
-    HMODULE hGdi32 = GetModuleHandleW(L"gdi32.dll");
-    if (hGdi32) {
-        void* pPatBlt = (void*)GetProcAddress(hGdi32, "PatBlt");
-        if (pPatBlt) Wh_SetFunctionHook(pPatBlt, (void*)PatBlt_Hook, (void**)&PatBlt_Original);
-    }
-
-    HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
-    if (hUser32) {
-        void* pFillRect = (void*)GetProcAddress(hUser32, "FillRect");
-        if (pFillRect) Wh_SetFunctionHook(pFillRect, (void*)FillRect_Hook, (void**)&FillRect_Original);
-    }
-
-    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
-    if (hKernel32) {
-        void* pExitProcess = (void*)GetProcAddress(hKernel32, "ExitProcess");
-        if (pExitProcess) Wh_SetFunctionHook(pExitProcess, (void*)ExitProcess_Hook, (void**)&ExitProcess_Original);
-    }
+    if (!WindhawkUtils::SetFunctionHook(PatBlt, PatBlt_Hook, &PatBlt_Original)) Wh_Log(L"Failed to hook PatBlt");
+    if (!WindhawkUtils::SetFunctionHook(FillRect, FillRect_Hook, &FillRect_Original)) Wh_Log(L"Failed to hook FillRect");
+    if (!WindhawkUtils::SetFunctionHook(ExitProcess, ExitProcess_Hook, &ExitProcess_Original)) Wh_Log(L"Failed to hook ExitProcess");
 
     return TRUE;
 }
 
 void Wh_ModUninit() {
     RestoreOriginalColors();
+    
+    if (g_hSeparatorBrush) DeleteObject(g_hSeparatorBrush);
+    std::lock_guard<std::mutex> lock(g_brushMutex);
+    for (HBRUSH b : g_oldBrushes) DeleteObject(b);
+    g_oldBrushes.clear();
 }
