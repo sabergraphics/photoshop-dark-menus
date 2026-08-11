@@ -14,7 +14,7 @@ The mod has two theming engines, selectable in the settings.
 
 ### Global system colors (default)
 
-Photoshop renders its legacy Win32 menus through the classic (unthemed) path, which reads the shared system color table directly — so per-process dark-mode techniques (`SetPreferredAppMode`, `GetSysColor` hooks) do not reach it. This engine updates the active Windows session palette with `SetSysColors`, which is the only approach found to reliably darken Photoshop's menus. No permanent modifications are made to registry keys on disk.
+Photoshop renders its legacy Win32 menus through the classic (unthemed) path, which reads the shared system color table directly, so per-process dark-mode techniques (`SetPreferredAppMode`, `GetSysColor` hooks) do not reach it. This engine updates the active Windows session palette with `SetSysColors`, which is the only approach found to reliably darken Photoshop's menus. No permanent modifications are made to registry keys on disk.
 
 **Warning:** while this mode is active, the menu/selection/3D colors change for *every* application on the desktop, not just Photoshop, until Photoshop exits. Safeguards used in this mode:
 
@@ -35,7 +35,7 @@ In testing, this mode does **not** darken Photoshop's menu backgrounds and text,
 
 ## Why a Standalone Mod?
 
-The system-wide [Dark mode context menus](https://github.com/MGGSK/DarkMenus) (`dark-menus`) Windhawk mod darkens Win32 menus globally via per-process theming, but that approach does not reach Photoshop's classic menu rendering (see above — the same technique is implemented here as the experimental mode and has no effect on Photoshop). This mod additionally offers:
+The system-wide [Dark mode context menus](https://github.com/MGGSK/DarkMenus) (`dark-menus`) Windhawk mod darkens Win32 menus globally via per-process theming, but that approach does not reach Photoshop's classic menu rendering (see above, the same technique is implemented here as the experimental mode and has no effect on Photoshop). This mod additionally offers:
 
 1. Fully customizable menu colors (background, text, highlight, separator, disabled text).
 2. Photoshop-scoped GDI separator hooks. Photoshop draws its menu separators using legacy Win32 GDI functions (`PatBlt` and `FillRect`); this mod strictly targets device contexts belonging to active menu windows. Merging such application-tailored hooks into a global `@include *` mod would risk visual glitches and false-positive artifacts in other applications.
