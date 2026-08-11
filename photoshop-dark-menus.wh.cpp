@@ -27,7 +27,7 @@ Forces dark mode for all context and top menu bar dropdowns in Adobe Photoshop w
 ### Screenshots
 ![Photoshop Dark Menu Dropdown](images/photoshop-dark-menu-screenshot-1.png)
 
-![Photoshop Dark Context Menu](imagesphotoshop-dark-menu-screenshot-2.png)
+![Photoshop Dark Context Menu](images/photoshop-dark-menu-screenshot-2.png)
 */
 // ==/WindhawkModReadme==
 
