@@ -29,7 +29,7 @@ So every pixel of a menu item is reachable from inside the process:
 | Popup background around items | system, from `COLOR_MENU` | `MENUINFO::hbrBack` at `WM_INITMENUPOPUP` |
 | Popup frame | system, kernel-side, from the 3D colors | repainted from a subclass on the popup |
 
-The system color overrides apply **only while a menu is open**, so Photoshop's dialogs, panels and lists keep the normal system colors. The popup frame is the one part drawn kernel-side, where no user-mode hook can reach it, so the popup is subclassed at creation and its frame is repainted afterwards.
+The system color overrides apply **only while a menu is open on the thread that opened it**, so Photoshop's dialogs, panels and lists keep the normal system colors. The popup frame is the one part drawn kernel-side, where no user-mode hook can reach it, so the popup window is subclassed and its frame repainted after the system has drawn it.
 
 ## Why a standalone mod?
 
@@ -42,15 +42,16 @@ The system-wide [Dark mode context menus](https://github.com/MGGSK/DarkMenus) (`
 
 The following settings can be customized in the Windhawk mod panel:
 
-- **Menu Background Color**: Background color for all menu popups (Default: `#282828`).
+- **Menu Background Color**: Background color for all menu popups (Default: `#2D2D2D`).
 - **Menu Text Color**: Text color for active items (Default: `#DCDCDC`).
 - **Highlight Background Color**: Color when hovering over an item (Default: `#505050`).
 - **Highlight Text Color**: Text color when hovering over an item (Default: `#FFFFFF`).
 - **Separator Line Color**: Color for separator lines. Set to match the background color to hide them completely (Default: `#383838`).
 - **Disabled Text Color**: Text color for disabled menu items (Default: `#808080`).
-- **Border Color**: Color of the popup frame. Leave empty to keep the system frame (Default: `#282828`).
-- **Debug Logging**: Diagnostic logging, off by default.
+- **Border Color**: Color of the popup frame. Leave empty to keep the system frame (Default: `#2D2D2D`).
 
 ## Scope
 
 The menu bar itself (File, Edit, Image, ...) is drawn by Photoshop's own UI framework and already follows Photoshop's interface theme; this mod covers the dropdown popups and context menus.
+
+Menus that Windows pops up through its own internal paths, without going through the exported `TrackPopupMenu` / `TrackPopupMenuEx` — a window's system menu, for example — are outside the reach of an in-process hook and keep the system colors.
