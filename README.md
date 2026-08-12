@@ -1,6 +1,8 @@
 # Photoshop Dark Menus
 
-This Windhawk mod enables dark menus (top-bar dropdowns and context menus) in Adobe Photoshop on Windows 11, along with custom color settings.
+This Windhawk mod enables dark menus (top-bar dropdowns and context menus) in Adobe Photoshop on Windows, with fully customizable colors.
+
+Everything happens inside the Photoshop process. No system colors are changed, no other application is affected, and nothing has to be restored when Photoshop exits or crashes.
 
 ## Screenshots
 
@@ -10,45 +12,45 @@ This Windhawk mod enables dark menus (top-bar dropdowns and context menus) in Ad
 
 ## How it works
 
-The mod has two theming engines, selectable in the settings.
+Photoshop's menus look like classic unthemed Win32 menus, but they are not. The process is themed (`IsAppThemed() == 1`), and Photoshop **owner-draws every menu item itself** through `AdobeOwl.dll`, using plain GDI, inside its own process. Instrumenting a running Photoshop shows the popups going up via `TrackPopupMenuEx`, and each item being painted with:
 
-### Global system colors (default)
+- `FillRect(hdc, &rc, (HBRUSH)(COLOR_MENU + 1))` for the item background, and `(HBRUSH)(COLOR_HIGHLIGHT + 1)` for the hovered item. These **system color pseudo-handles** are resolved inside `user32` from shared memory, so they never reach `GetSysColor` or `GetSysColorBrush` — which is why hooking those alone appears to do nothing.
+- `GetSysColor(COLOR_MENUTEXT / COLOR_GRAYTEXT / COLOR_HIGHLIGHTTEXT)` for item, disabled and selected text.
+- Photoshop's own 1px `FillRect` for separator lines.
 
-Photoshop renders its legacy Win32 menus through the classic (unthemed) path, which reads the shared system color table directly, so per-process dark-mode techniques (`SetPreferredAppMode`, `GetSysColor` hooks) do not reach it. This engine updates the active Windows session palette with `SetSysColors`, which is the only approach found to reliably darken Photoshop's menus. No permanent modifications are made to registry keys on disk.
+So every pixel of a menu item is reachable from inside the process:
 
-**Warning:** while this mode is active, the menu/selection/3D colors change for *every* application on the desktop, not just Photoshop, until Photoshop exits. Safeguards used in this mode:
+| Element | How Photoshop draws it | How the mod reaches it |
+| --- | --- | --- |
+| Item background | `FillRect` with a `COLOR_MENU` pseudo-handle | `FillRect` hook re-resolves the pseudo-handle through the mod's colors |
+| Hover highlight | `FillRect` with a `COLOR_HIGHLIGHT` pseudo-handle | same |
+| Item / disabled / selected text | `GetSysColor` | `GetSysColor` hook, scoped to open menus |
+| Separators | own 1px `FillRect` | `FillRect` / `PatBlt` hook, scoped to menu DCs |
+| Popup background around items | system, from `COLOR_MENU` | `MENUINFO::hbrBack` at `WM_INITMENUPOPUP` |
+| Popup frame | system, kernel-side, from the 3D colors | repainted from a subclass on the popup |
 
-- Original colors are backed up from `HKCU\Control Panel\Colors` (not from the possibly-already-modified live palette), so restarts and multiple instances cannot corrupt the backup.
-- Colors are restored from an `ExitProcess` teardown hook. If another Photoshop instance is still running, restoration is deferred to the last instance to exit, so instances no longer fight over the palette.
-- If Photoshop **hard-crashes** (faulty plugin, Force Quit via Task Manager), the teardown hook cannot run and the desktop may remain dark. Launching and cleanly closing Photoshop once restores the original colors.
+The system color overrides apply **only while a menu is open**, so Photoshop's dialogs, panels and lists keep the normal system colors. The popup frame is the one part drawn kernel-side, where no user-mode hook can reach it, so the popup is subclassed at creation and its frame is repainted afterwards.
 
-### Process-local (experimental)
+## Why a standalone mod?
 
-Everything stays inside the Photoshop process; no other application is affected:
+The system-wide [Dark mode context menus](https://github.com/MGGSK/DarkMenus) (`dark-menus`) mod switches a process to uxtheme's dark menu theme with `SetPreferredAppMode` + `FlushMenuThemes`. That cannot help Photoshop: uxtheme only themes menus it draws, and Photoshop draws its menu items itself, so there is nothing for the dark menu theme to attach to. This mod intercepts Photoshop's own drawing instead, and adds:
 
-- Switches the process to the dark menu theme via `uxtheme` (`SetPreferredAppMode` + `FlushMenuThemes`).
-- Hooks `GetSysColor` / `GetSysColorBrush` in-process, so legacy menu drawing code picks up the custom colors without touching the system palette.
-- Sets a custom background brush on Photoshop's menus (`MENUINFO::hbrBack`, applied to submenus and to context menus via `TrackPopupMenu(Ex)` hooks).
-- Hooks `PatBlt` / `FillRect`, strictly scoped to active menu windows (class `#32768` or modal `GUI_INMENUMODE`), to recolor the separator lines that Photoshop draws with legacy GDI calls.
-
-In testing, this mode does **not** darken Photoshop's menu backgrounds and text, because Photoshop's classic menu rendering bypasses the hooked user-mode color APIs. It is kept as an opt-in for experimentation and for setups where it may behave differently.
-
-## Why a Standalone Mod?
-
-The system-wide [Dark mode context menus](https://github.com/MGGSK/DarkMenus) (`dark-menus`) Windhawk mod darkens Win32 menus globally via per-process theming, but that approach does not reach Photoshop's classic menu rendering (see above, the same technique is implemented here as the experimental mode and has no effect on Photoshop). This mod additionally offers:
-
-1. Fully customizable menu colors (background, text, highlight, separator, disabled text).
-2. Photoshop-scoped GDI separator hooks. Photoshop draws its menu separators using legacy Win32 GDI functions (`PatBlt` and `FillRect`); this mod strictly targets device contexts belonging to active menu windows. Merging such application-tailored hooks into a global `@include *` mod would risk visual glitches and false-positive artifacts in other applications.
-3. A global-palette engine with strict safeguards (registry-backed color backups, last-instance-to-exit restoration, `ExitProcess` teardown hooks) for the rendering path that per-process theming cannot reach.
+1. Fully customizable colors (background, text, highlight, highlight text, separator, disabled text, border).
+2. Photoshop-scoped GDI hooks. Re-resolving system color pseudo-handles and recoloring 1px fills is safe when scoped to one application's menus; it would risk false positives across every app in a global `@include *` mod.
 
 ## Options
 
 The following settings can be customized in the Windhawk mod panel:
 
-- **Theming Mode**: Global system colors (default; affects the whole desktop while Photoshop runs) or process-local (experimental; only affects Photoshop but does not darken menus on most setups).
 - **Menu Background Color**: Background color for all menu popups (Default: `#282828`).
 - **Menu Text Color**: Text color for active items (Default: `#DCDCDC`).
 - **Highlight Background Color**: Color when hovering over an item (Default: `#505050`).
 - **Highlight Text Color**: Text color when hovering over an item (Default: `#FFFFFF`).
 - **Separator Line Color**: Color for separator lines. Set to match the background color to hide them completely (Default: `#383838`).
 - **Disabled Text Color**: Text color for disabled menu items (Default: `#808080`).
+- **Border Color**: Color of the popup frame. Leave empty to keep the system frame (Default: `#282828`).
+- **Debug Logging**: Diagnostic logging, off by default.
+
+## Scope
+
+The menu bar itself (File, Edit, Image, ...) is drawn by Photoshop's own UI framework and already follows Photoshop's interface theme; this mod covers the dropdown popups and context menus.
