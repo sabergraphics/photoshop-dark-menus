@@ -129,7 +129,12 @@ Requests to cover a part of the interface this mod does not reach yet are welcom
 
 ## Asking a question
 
-Open an [issue](https://github.com/sabergraphics/photoshop-dark-menus/issues) here, or ask in the [Windhawk mods discussions](https://github.com/ramensoftware/windhawk-mods/discussions) for anything about Windhawk and its mods in general.
+1. Go to [Discussions](https://github.com/sabergraphics/photoshop-dark-menus/discussions)
+2. Click **New discussion**
+3. Pick the **Q&A** category
+4. Write the question and start the discussion
+
+For anything about Windhawk itself rather than this mod, the [Windhawk mods discussions](https://github.com/ramensoftware/windhawk-mods/discussions) are the better place to ask.
 
 ## License
 

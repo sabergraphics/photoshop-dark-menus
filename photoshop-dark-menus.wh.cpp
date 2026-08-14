@@ -122,6 +122,21 @@ matching color values rather than intercepting a system one, in a window class
 Photoshop also uses for its swatches and color pickers - where a light fill is
 the content.
 
+## Source and bug reports
+
+The mod is developed at
+[github.com/sabergraphics/photoshop-dark-menus](https://github.com/sabergraphics/photoshop-dark-menus).
+
+Report a problem in
+[Issues](https://github.com/sabergraphics/photoshop-dark-menus/issues). Menu
+drawing depends on the environment more than most things do, so please say which
+Photoshop and Windows version you are on, what your display scaling is, which
+menu or dropdown list is wrong, and whether the `dark-menus` mod is installed as
+well. A screenshot usually says more than a description does.
+
+Questions go in
+[Discussions](https://github.com/sabergraphics/photoshop-dark-menus/discussions).
+
 ## Changelog
 
 ### 1.1.0
