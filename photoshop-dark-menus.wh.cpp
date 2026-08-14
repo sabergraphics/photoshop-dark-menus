@@ -197,8 +197,8 @@ std::atomic<COLORREF> g_colBorder{CLR_INVALID};
 
 std::atomic<bool> g_themeDropdowns{true};
 
-// Brushes are published with an atomic exchange and never deleted - see the
-// note in Wh_ModUninit.
+// Brushes are published with an atomic store and never deleted - see the note
+// in Wh_ModUninit.
 std::atomic<HBRUSH> g_hMenuBrush{nullptr};
 std::atomic<HBRUSH> g_hTextBrush{nullptr};
 std::atomic<HBRUSH> g_hHighlightBrush{nullptr};
@@ -206,8 +206,6 @@ std::atomic<HBRUSH> g_hHiTextBrush{nullptr};
 std::atomic<HBRUSH> g_hGrayBrush{nullptr};
 std::atomic<HBRUSH> g_hSeparatorBrush{nullptr};
 std::atomic<HBRUSH> g_hBorderBrush{nullptr};
-std::vector<HBRUSH> g_retiredBrushes;
-std::mutex g_brushMutex;
 
 // Number of menu tracking calls currently on this thread's stack. This is what
 // decides whether the per-menu hooks are needed, not whether a color should be
@@ -291,15 +289,13 @@ COLORREF ParseHexColorOr(PCWSTR hexStr, COLORREF defaultColor) {
     return ParseHexColor(hexStr, &c) ? c : defaultColor;
 }
 
+// The brush being replaced is not deleted, and is not remembered either: there
+// is nothing that could ever be done with it. See the note in Wh_ModUninit.
 void PublishBrush(std::atomic<HBRUSH>* pSlot, HBRUSH hNew) {
-    HBRUSH hOld = pSlot->exchange(hNew, std::memory_order_release);
-    if (hOld) {
-        std::lock_guard<std::mutex> lock(g_brushMutex);
-        g_retiredBrushes.push_back(hOld);
-    }
+    pSlot->store(hNew, std::memory_order_release);
 }
 
-// Retired brushes are never deleted, so a settings change that recreated all
+// A replaced brush is never deleted, so a settings change that recreated all
 // seven would leak six of them for nothing. Only the colors that actually moved
 // get a new brush.
 void PublishColor(std::atomic<COLORREF>* pColor, std::atomic<HBRUSH>* pSlot, COLORREF color) {
@@ -348,6 +344,11 @@ void LoadSettings() {
 inline bool MenuIsOpen() {
     return tl_menuDepth > 0;
 }
+
+// The two window classes the mod knows about, both created by user32 for
+// itself: the menu popup, and the list half of a combo box.
+constexpr PCWSTR kMenuPopupClass = L"#32768";
+constexpr PCWSTR kComboListClass = L"ComboLBox";
 
 // Photoshop paints menu items into a popup-sized memory DC while the popup is
 // being laid out, and directly onto the popup's own window DC when an item is
@@ -470,7 +471,8 @@ void ApplyMenuBackground(HMENU hMenu) {
         }
     }
 
-    MENUINFO mi = { sizeof(mi) };
+    MENUINFO mi = {};
+    mi.cbSize = sizeof(mi);
     mi.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS;
     mi.hbrBack = hBrush;
     if (!SetMenuInfo(hMenu, &mi)) return;
@@ -495,7 +497,8 @@ void RestoreStampedMenus() {
     // SetMenuInfo can reach a menu owned by another thread, so it is called
     // with the lock released.
     for (HMENU hMenu : menus) {
-        MENUINFO mi = { sizeof(mi) };
+        MENUINFO mi = {};
+        mi.cbSize = sizeof(mi);
         mi.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS;
         mi.hbrBack = nullptr;
         SetMenuInfo(hMenu, &mi);
@@ -566,9 +569,21 @@ void PaintPopupBorder(HWND hWnd, HDC hdcTarget) {
 // Undocumented: sent to a window to paint its frame into the DC in wParam.
 constexpr UINT WM_NCUAHDRAWFRAME = 0x00AF;
 
-bool IsMenuPopupWindow(HWND hWnd) {
+// One class lookup answers both questions. The CBT hook asks about every window
+// Photoshop creates, so a window it cares about nothing for should cost a single
+// call into the window manager rather than one per class.
+enum class WindowKind { Other, MenuPopup, ComboList };
+
+WindowKind ClassifyWindow(HWND hWnd) {
     WCHAR cls[16];
-    return GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) && wcscmp(cls, L"#32768") == 0;
+    if (!GetClassNameW(hWnd, cls, ARRAYSIZE(cls))) return WindowKind::Other;
+    if (wcscmp(cls, kMenuPopupClass) == 0) return WindowKind::MenuPopup;
+    if (wcscmp(cls, kComboListClass) == 0) return WindowKind::ComboList;
+    return WindowKind::Other;
+}
+
+bool IsMenuPopupWindow(HWND hWnd) {
+    return ClassifyWindow(hWnd) == WindowKind::MenuPopup;
 }
 
 // The system reuses menu popup windows, so a subclassed popup can still be
@@ -584,7 +599,7 @@ LRESULT CALLBACK MenuPopupSubclassProc(HWND hWnd,
                                        UINT uMsg,
                                        WPARAM wParam,
                                        LPARAM lParam,
-                                       DWORD_PTR dwRefData) {
+                                       [[maybe_unused]] DWORD_PTR dwRefData) {
     if (uMsg == WM_NCDESTROY) {
         std::lock_guard<std::mutex> lock(g_subclassedPopupsMutex);
         g_subclassedPopups.erase(hWnd);
@@ -639,8 +654,7 @@ void SubclassPopup(HWND hWnd) {
 }
 
 bool IsComboListWindow(HWND hWnd) {
-    WCHAR cls[16];
-    return GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) && wcscmp(cls, L"ComboLBox") == 0;
+    return ClassifyWindow(hWnd) == WindowKind::ComboList;
 }
 
 std::unordered_set<HWND> g_subclassedLists;
@@ -656,7 +670,7 @@ LRESULT CALLBACK ComboListSubclassProc(HWND hWnd,
                                        UINT uMsg,
                                        WPARAM wParam,
                                        LPARAM lParam,
-                                       DWORD_PTR dwRefData) {
+                                       [[maybe_unused]] DWORD_PTR dwRefData) {
     if (uMsg == WM_NCDESTROY) {
         std::lock_guard<std::mutex> lock(g_subclassedListsMutex);
         g_subclassedLists.erase(hWnd);
@@ -704,10 +718,10 @@ void SubclassComboList(HWND hWnd) {
 LRESULT CALLBACK CbtProcHook(int code, WPARAM wParam, LPARAM lParam) {
     if (code == HCBT_CREATEWND) {
         HWND hWnd = (HWND)wParam;
-        if (IsMenuPopupWindow(hWnd)) {
-            SubclassPopup(hWnd);
-        } else if (IsComboListWindow(hWnd)) {
-            SubclassComboList(hWnd);
+        switch (ClassifyWindow(hWnd)) {
+            case WindowKind::MenuPopup: SubclassPopup(hWnd); break;
+            case WindowKind::ComboList: SubclassComboList(hWnd); break;
+            case WindowKind::Other:     break;
         }
     }
     return CallNextHookEx(nullptr, code, wParam, lParam);
@@ -726,25 +740,53 @@ LRESULT CALLBACK CallWndRetProcHook(int code, WPARAM wParam, LPARAM lParam);
 // with no menu in sight, and the list windows are created once per combo box and
 // kept for the life of the process - most of them before this mod ever loaded -
 // so the only thing that reliably identifies one is the painting itself.
-void InstallThreadHook(DWORD tid) {
+// Returns whether the thread is now recorded as hooked, which is false only
+// when every hook failed and the thread was given back for a later retry.
+bool InstallThreadHook(DWORD tid) {
     {
         std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
-        if (!g_hookedThreads.insert(tid).second) return;
+        if (!g_hookedThreads.insert(tid).second) return true;
     }
 
-    HHOOK hCbt = SetWindowsHookExW(WH_CBT, CbtProcHook, nullptr, tid);
-    HHOOK hCwp = SetWindowsHookExW(WH_CALLWNDPROC, CallWndProcHook, nullptr, tid);
+    // The closing hook goes up before the opening one, never the other way
+    // round. The two bracket tl_comboListDepth, and the thread is live: a
+    // WM_DRAWITEM dispatched between the two calls with only the opening hook
+    // installed would raise the counter with nothing left to lower it, and
+    // nothing resets it the way LeaveMenu resets the menu counter. The color
+    // hooks read that counter on its own, with no window class to fall back on,
+    // so the whole thread would then paint in the mod's colors for the rest of
+    // the session. In this order the odd message out closes a bracket that was
+    // never opened, which the > 0 guards in the return hook already absorb.
     HHOOK hCwpRet = SetWindowsHookExW(WH_CALLWNDPROCRET, CallWndRetProcHook, nullptr, tid);
-    TrackWinHook(hCbt);
-    TrackWinHook(hCwp);
-    TrackWinHook(hCwpRet);
+    // And for the same reason the opening hook is not installed alone.
+    HHOOK hCwp = hCwpRet ? SetWindowsHookExW(WH_CALLWNDPROC, CallWndProcHook, nullptr, tid)
+                         : nullptr;
+    HHOOK hCbt = SetWindowsHookExW(WH_CBT, CbtProcHook, nullptr, tid);
+    DWORD lastError = GetLastError();
 
-    if (!hCbt || !hCwp || !hCwpRet) {
-        Wh_Log(L"SetWindowsHookEx failed on thread %u (%u); menus and dropdowns "
-               L"fall back to the system colors.", tid, GetLastError());
-    } else {
+    TrackWinHook(hCwpRet);
+    TrackWinHook(hCwp);
+    TrackWinHook(hCbt);
+
+    if (hCwpRet && hCwp && hCbt) {
         Wh_Log(L"Hooked thread %u.", tid);
+        return true;
     }
+
+    Wh_Log(L"SetWindowsHookEx failed on thread %u (%u); menus and dropdowns "
+           L"fall back to the system colors.", tid, lastError);
+
+    // Nothing went up, so let a later paint on this thread try again rather
+    // than leaving the thread recorded as hooked when it is not. A partial
+    // failure keeps what it got: retrying would only add a second copy of the
+    // hooks that did install.
+    if (!hCwpRet && !hCwp && !hCbt) {
+        std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
+        g_hookedThreads.erase(tid);
+        return false;
+    }
+
+    return true;
 }
 
 // Called from the color hooks, which any thread that paints reaches early. The
@@ -793,7 +835,9 @@ void EnsureThreadHooks() {
         return;
     }
 
-    InstallThreadHook(GetCurrentThreadId());
+    if (!InstallThreadHook(GetCurrentThreadId())) {
+        tl_threadSwept = false;  // hooks would not go up - ask again later
+    }
 }
 
 // An owner-draw callback for a menu item, and one for a row of a list. The
@@ -1007,7 +1051,7 @@ int WINAPI FillRect_Hook(HDC hdc, const RECT* lprc, HBRUSH hbr) {
     if (sysIndex <= (ULONG_PTR)COLOR_MENUBAR) {
         HBRUSH ours = inMenu ? BrushForSysColor((int)sysIndex)
                              : BrushForDropdown((int)sysIndex);
-        if (ours && IsPaintContext(hdc, inMenu ? L"#32768" : L"ComboLBox")) {
+        if (ours && IsPaintContext(hdc, inMenu ? kMenuPopupClass : kComboListClass)) {
             Wh_Log(L"FillRect: system color %d -> mod color, %dx%d", (int)sysIndex, w, h);
             return FillRect_Original(hdc, lprc, ours);
         }
@@ -1017,7 +1061,7 @@ int WINAPI FillRect_Hook(HDC hdc, const RECT* lprc, HBRUSH hbr) {
     // Separator lines are a menu shape; a list draws its dividers as part of an
     // item, so the geometry guess is not extended to one.
     HBRUSH hSep = g_hSeparatorBrush.load(std::memory_order_acquire);
-    if (inMenu && hSep && IsSeparatorGeometry(hdc, w, h) && IsPaintContext(hdc, L"#32768")) {
+    if (inMenu && hSep && IsSeparatorGeometry(hdc, w, h) && IsPaintContext(hdc, kMenuPopupClass)) {
         Wh_Log(L"FillRect: separator %dx%d recolored", w, h);
         return FillRect_Original(hdc, lprc, hSep);
     }
@@ -1032,7 +1076,7 @@ BOOL WINAPI PatBlt_Hook(HDC hdc, int x, int y, int w, int h, DWORD rop) {
     }
 
     HBRUSH hSep = g_hSeparatorBrush.load(std::memory_order_acquire);
-    if (hSep && IsSeparatorGeometry(hdc, w, h) && IsPaintContext(hdc, L"#32768")) {
+    if (hSep && IsSeparatorGeometry(hdc, w, h) && IsPaintContext(hdc, kMenuPopupClass)) {
         HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hSep);
         BOOL bRes = PatBlt_Original(hdc, x, y, w, h, rop);
         SelectObject(hdc, hOldBrush);
@@ -1129,8 +1173,4 @@ void Wh_ModUninit() {
     // lifetime. Deleting them means Photoshop eventually paints with a freed -
     // possibly recycled - GDI handle. A handful of brushes for the remaining
     // lifetime of the process is a trivial cost next to a crash in the host.
-    {
-        std::lock_guard<std::mutex> lock(g_brushMutex);
-        g_retiredBrushes.clear();
-    }
 }
