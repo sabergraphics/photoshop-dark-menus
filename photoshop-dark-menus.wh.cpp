@@ -28,6 +28,37 @@ and no other application is affected.
 
 ![Context Menu](https://raw.githubusercontent.com/sabergraphics/photoshop-dark-menus/main/images/photoshop-dark-menu-screenshot-2.png)
 
+## Options
+
+- **Menu Background Color**: Background color for all menu popups (Default: `#2D2D2D`).
+- **Menu Text Color**: Text color for active items (Default: `#DCDCDC`).
+- **Highlight Background Color**: Color when hovering over an item (Default: `#505050`).
+- **Highlight Text Color**: Text color when hovering over an item (Default: `#FFFFFF`).
+- **Separator Line Color**: Color for separator lines. Set to match the background color to hide them completely (Default: `#383838`).
+- **Disabled Text Color**: Text color for disabled menu items (Default: `#808080`).
+- **Border Color**: Color of the popup frame. Leave empty to keep the system frame (Default: `#2D2D2D`).
+- **Theme Dropdown Lists**: Darken the dropdown lists as well, using the colors above (Default: on).
+
+Colors can be given as `#RRGGBB` or the short `#RGB` form.
+
+## Relationship to the `dark-menus` mod
+
+The system-wide [Dark mode context menus](https://windhawk.net/mods/dark-menus)
+(`dark-menus`) mod does **not** cover the menus this one covers. The two are
+complementary rather than alternatives, and it is worth running both.
+
+`dark-menus` puts a process into uxtheme's dark menu theme with
+`SetPreferredAppMode` + `FlushMenuThemes`, which reaches the menus uxtheme
+itself draws. Photoshop's own menus are not among them: it owner-draws every
+item with plain GDI, so there is nothing for that theme to attach to. This mod
+intercepts Photoshop's own drawing instead, and adds per-color customization
+scoped to the one application.
+
+The reverse holds too. A few menus in Photoshop are put up by Windows rather
+than drawn by Photoshop - the context menu on a panel tab, for one - and those
+are painted by the theming engine, below the level any in-process hook here can
+reach. `dark-menus` darkens exactly those. Between them the two cover the set.
+
 ## How it works
 
 Photoshop's menus look like classic unthemed Win32 menus, but they are not:
@@ -72,37 +103,6 @@ Both routes are therefore covered, over a table that maps every background index
 to the background color and every text index to the text color. The list window
 is subclassed so that all of it applies only while that list is painting, which
 leaves every other control reading those same colors alone.
-
-## Relationship to the `dark-menus` mod
-
-The system-wide [Dark mode context menus](https://windhawk.net/mods/dark-menus)
-(`dark-menus`) mod does **not** cover the menus this one covers. The two are
-complementary rather than alternatives, and it is worth running both.
-
-`dark-menus` puts a process into uxtheme's dark menu theme with
-`SetPreferredAppMode` + `FlushMenuThemes`, which reaches the menus uxtheme
-itself draws. Photoshop's own menus are not among them: it owner-draws every
-item with plain GDI, so there is nothing for that theme to attach to. This mod
-intercepts Photoshop's own drawing instead, and adds per-color customization
-scoped to the one application.
-
-The reverse holds too. A few menus in Photoshop are put up by Windows rather
-than drawn by Photoshop - the context menu on a panel tab, for one - and those
-are painted by the theming engine, below the level any in-process hook here can
-reach. `dark-menus` darkens exactly those. Between them the two cover the set.
-
-## Options
-
-- **Menu Background Color**: Background color for all menu popups (Default: `#2D2D2D`).
-- **Menu Text Color**: Text color for active items (Default: `#DCDCDC`).
-- **Highlight Background Color**: Color when hovering over an item (Default: `#505050`).
-- **Highlight Text Color**: Text color when hovering over an item (Default: `#FFFFFF`).
-- **Separator Line Color**: Color for separator lines. Set to match the background color to hide them completely (Default: `#383838`).
-- **Disabled Text Color**: Text color for disabled menu items (Default: `#808080`).
-- **Border Color**: Color of the popup frame. Leave empty to keep the system frame (Default: `#2D2D2D`).
-- **Theme Dropdown Lists**: Darken the dropdown lists as well, using the colors above (Default: on).
-
-Colors can be given as `#RRGGBB` or the short `#RGB` form.
 
 ## Scope
 
