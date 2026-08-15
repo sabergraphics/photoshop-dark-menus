@@ -190,6 +190,7 @@ Questions go in
 #include <wctype.h>
 #include <atomic>
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -444,6 +445,10 @@ bool ColorForDropdown(int nIndex, COLORREF* pOut) {
     return false;
 }
 
+// The brush half of the table above, and a mirror of it: a list is free to fill
+// from either route, so an index answered by one and not the other is an index
+// that comes out themed or system-colored depending on which call Photoshop
+// happened to make.
 HBRUSH BrushForDropdown(int nIndex) {
     switch (nIndex) {
         case COLOR_WINDOW:
@@ -454,6 +459,10 @@ HBRUSH BrushForDropdown(int nIndex) {
         case COLOR_HIGHLIGHT:     return g_hHighlightBrush.load(std::memory_order_acquire);
         case COLOR_HIGHLIGHTTEXT: return g_hHiTextBrush.load(std::memory_order_acquire);
         case COLOR_GRAYTEXT:      return g_hGrayBrush.load(std::memory_order_acquire);
+        case COLOR_WINDOWFRAME: {
+            HBRUSH hBorder = g_hBorderBrush.load(std::memory_order_acquire);
+            return hBorder ? hBorder : g_hMenuBrush.load(std::memory_order_acquire);
+        }
     }
     return nullptr;
 }
@@ -754,7 +763,14 @@ LRESULT CALLBACK CbtProcHook(int code, WPARAM wParam, LPARAM lParam) {
 // Threads whose CBT hook is up. Keyed globally rather than by a thread_local so
 // the hook can also be installed for a thread from outside it, which is what
 // Wh_ModAfterInit does for a Photoshop that is already running.
-std::unordered_set<DWORD> g_hookedThreads;
+//
+// Each entry holds the thread open, which is the only way to tell the thread
+// that was hooked from a later one that inherited its id. Windows recycles
+// thread ids and Photoshop churns worker threads, so without the handle a new
+// UI thread landing on a dead one's id would be waved through with nothing
+// installed - and stay that way, silently, since nothing else raises
+// tl_menuDrawDepth and the thread's menus would simply never be themed.
+std::unordered_map<DWORD, HANDLE> g_hookedThreads;
 std::mutex g_hookedThreadsMutex;
 
 LRESULT CALLBACK CallWndProcHook(int code, WPARAM wParam, LPARAM lParam);
@@ -767,9 +783,30 @@ LRESULT CALLBACK CallWndRetProcHook(int code, WPARAM wParam, LPARAM lParam);
 // Returns whether the thread is now recorded as hooked, which is false only
 // when every hook failed and the thread was given back for a later retry.
 bool InstallThreadHook(DWORD tid) {
+    // Opened before the lock is taken, since it is only ever needed to answer a
+    // question about an entry that already exists.
+    HANDLE hThread = OpenThread(SYNCHRONIZE, FALSE, tid);
+
     {
         std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
-        if (!g_hookedThreads.insert(tid).second) return true;
+
+        auto it = g_hookedThreads.find(tid);
+        if (it != g_hookedThreads.end()) {
+            // A recorded thread with no handle behind it is trusted the way it
+            // used to be: there is nothing to test it against, and reinstalling
+            // on every call would be worse than the recycled id it guards.
+            if (!it->second || WaitForSingleObject(it->second, 0) == WAIT_TIMEOUT) {
+                if (hThread) CloseHandle(hThread);
+                return true;
+            }
+
+            // The recorded thread has exited, so this id has come round to a new
+            // one and the hooks went with the old thread. Install for this one.
+            CloseHandle(it->second);
+            g_hookedThreads.erase(it);
+        }
+
+        g_hookedThreads.emplace(tid, hThread);
     }
 
     // The closing hook goes up before the opening one, never the other way
@@ -781,12 +818,18 @@ bool InstallThreadHook(DWORD tid) {
     // so the whole thread would then paint in the mod's colors for the rest of
     // the session. In this order the odd message out closes a bracket that was
     // never opened, which the > 0 guards in the return hook already absorb.
+    //
+    // Each error is taken next to its own call. A later success does not clear
+    // the last error, so one reading taken after all three can just as easily
+    // belong to a call that worked.
     HHOOK hCwpRet = SetWindowsHookExW(WH_CALLWNDPROCRET, CallWndRetProcHook, nullptr, tid);
+    DWORD errCwpRet = hCwpRet ? 0 : GetLastError();
     // And for the same reason the opening hook is not installed alone.
     HHOOK hCwp = hCwpRet ? SetWindowsHookExW(WH_CALLWNDPROC, CallWndProcHook, nullptr, tid)
                          : nullptr;
+    DWORD errCwp = (hCwpRet && !hCwp) ? GetLastError() : 0;
     HHOOK hCbt = SetWindowsHookExW(WH_CBT, CbtProcHook, nullptr, tid);
-    DWORD lastError = GetLastError();
+    DWORD errCbt = hCbt ? 0 : GetLastError();
 
     TrackWinHook(hCwpRet);
     TrackWinHook(hCwp);
@@ -797,8 +840,9 @@ bool InstallThreadHook(DWORD tid) {
         return true;
     }
 
-    Wh_Log(L"SetWindowsHookEx failed on thread %u (%u); menus and dropdowns "
-           L"fall back to the system colors.", tid, lastError);
+    Wh_Log(L"SetWindowsHookEx failed on thread %u (ret=%u cwp=%u cbt=%u); menus "
+           L"and dropdowns fall back to the system colors.",
+           tid, errCwpRet, errCwp, errCbt);
 
     // Nothing went up, so let a later paint on this thread try again rather
     // than leaving the thread recorded as hooked when it is not. A partial
@@ -806,7 +850,11 @@ bool InstallThreadHook(DWORD tid) {
     // hooks that did install.
     if (!hCwpRet && !hCwp && !hCbt) {
         std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
-        g_hookedThreads.erase(tid);
+        auto it = g_hookedThreads.find(tid);
+        if (it != g_hookedThreads.end()) {
+            if (it->second) CloseHandle(it->second);
+            g_hookedThreads.erase(it);
+        }
         return false;
     }
 
@@ -883,8 +931,13 @@ bool IsMenuItemDraw(const DRAWITEMSTRUCT* di) {
 // The closed combo field arrives as a list draw too, marked ODS_COMBOBOXEDIT.
 // Photoshop paints that one in its own colors and it already looks right.
 //
-// Both the opening and the closing hook go through here, so the two stay
-// symmetric by construction.
+// Both the opening and the closing hook go through here, but that is not quite
+// symmetry by construction: the ODT_LISTBOX arm ends in a live class lookup, so
+// the two agree only while the window manager keeps answering the same way. The
+// list would have to be destroyed inside its own WM_DRAWITEM to break it. Worth
+// knowing because tl_comboListDepth is the one counter with nothing behind it -
+// tl_menuDrawDepth is reset in LeaveMenu, so a mismatch there is corrected on
+// the next menu, while a mismatch here would stick for the life of the thread.
 bool IsListItemDraw(const DRAWITEMSTRUCT* di) {
     if (di->itemState & ODS_COMBOBOXEDIT) return false;
     if (di->CtlType == ODT_COMBOBOX) return true;
@@ -1206,6 +1259,16 @@ void Wh_ModUninit() {
         for (HHOOK hHook : hooks) {
             UnhookWindowsHookEx(hHook);
         }
+    }
+
+    // The thread handles are held only to tell a hooked thread from a later one
+    // that inherited its id, and the hooks they described are now gone.
+    {
+        std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
+        for (const auto& entry : g_hookedThreads) {
+            if (entry.second) CloseHandle(entry.second);
+        }
+        g_hookedThreads.clear();
     }
 
     // Not WindhawkUtils::RemoveAllWindowSubclasses(), which needs Windhawk 1.8.
