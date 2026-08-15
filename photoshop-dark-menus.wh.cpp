@@ -256,12 +256,6 @@ private:
     int* pDepth;
 };
 
-// The hooks belong to a UI thread rather than to a menu: dropdown lists are
-// painted with no menu in sight, and both they and the menu popups are created
-// once and kept for the life of the process - usually well before this mod
-// loaded - so nothing about them can be caught at creation alone. See
-// EnsureThreadHooks and InstallThreadHook.
-
 // Unlike the mod's function hooks, SetWindowsHookEx hooks are not removed by the
 // Windhawk engine, and their procedures live in the mod image - so one still
 // registered when the image is unmapped calls into freed memory on the next
@@ -383,8 +377,9 @@ constexpr PCWSTR kComboListClass = L"ComboLBox";
 // Photoshop paints menu items into a popup-sized memory DC while the popup is
 // being laid out, and directly onto the popup's own window DC when an item is
 // re-drawn on hover. The memory DC fallback would match any memory DC, so it
-// leans on the caller having established tl_menuDrawDepth first: inside a menu's
-// WM_DRAWITEM, this thread is painting that menu item and nothing else.
+// leans on the caller having raised tl_menuDrawDepth or tl_comboListDepth
+// first: inside a menu's WM_DRAWITEM, or inside a list's own message handling,
+// this thread is painting that item and nothing else.
 bool IsPaintContext(HDC hdc, PCWSTR windowClass) {
     HWND hWnd = WindowFromDC(hdc);
     if (hWnd) {
@@ -758,7 +753,7 @@ LRESULT CALLBACK CbtProcHook(int code, WPARAM wParam, LPARAM lParam) {
 
 // Threads whose CBT hook is up. Keyed globally rather than by a thread_local so
 // the hook can also be installed for a thread from outside it, which is what
-// Wh_ModInit does for a Photoshop that is already running.
+// Wh_ModAfterInit does for a Photoshop that is already running.
 std::unordered_set<DWORD> g_hookedThreads;
 std::mutex g_hookedThreadsMutex;
 
@@ -869,9 +864,7 @@ void EnsureThreadHooks() {
     }
 }
 
-// An owner-draw callback for a menu item, and one for a row of a list. The
-// closed combo field arrives as a list draw too, marked ODS_COMBOBOXEDIT -
-// Photoshop paints that one in its own colors, and it already looks right.
+// An owner-draw callback for a menu item.
 bool IsMenuItemDraw(const DRAWITEMSTRUCT* di) {
     return di->CtlType == ODT_MENU;
 }
@@ -886,6 +879,9 @@ bool IsMenuItemDraw(const DRAWITEMSTRUCT* di) {
 // that fills its own light background and then draws text in whichever system
 // color it asks for - which this mod would otherwise answer in list colors and
 // leave light on light.
+//
+// The closed combo field arrives as a list draw too, marked ODS_COMBOBOXEDIT.
+// Photoshop paints that one in its own colors and it already looks right.
 //
 // Both the opening and the closing hook go through here, so the two stay
 // symmetric by construction.
@@ -930,9 +926,10 @@ LRESULT CALLBACK CallWndProcHook(int code, WPARAM wParam, LPARAM lParam) {
             tl_menuDrawDepth++;
         } else if (IsListItemDraw(di) && g_themeDropdowns.load(std::memory_order_relaxed)) {
             tl_comboListDepth++;
-            // hwndItem is the list window itself, which is how the mod finds a
-            // list it never saw created. The subclass is for the fill behind the
-            // whole list, which happens outside any WM_DRAWITEM.
+            // On the inner draw hwndItem is the list itself, which is how the
+            // mod finds a list it never saw created; on the outer one it is the
+            // combo box, hence the class check. The subclass is for the fill
+            // behind the whole list, which happens outside any WM_DRAWITEM.
             if (IsComboListWindow(di->hwndItem)) SubclassComboList(di->hwndItem);
             PrepareListItemDC(di);
         }
@@ -1173,20 +1170,21 @@ BOOL Wh_ModInit() {
     return TRUE;
 }
 
-// The sweep for windows that already exist waits for this rather than running
-// in Wh_ModInit, for two reasons. The hooks registered above are not applied
-// until Wh_ModInit returns, so a thread found early would be hooked before the
-// function hooks behind it were live. And Wh_ModUninit is not called when
-// Wh_ModInit returns FALSE, so anything installed on that path would outlive
-// the image: a SetWindowsHookEx procedure still registered against an unmapped
-// DLL is a crash on the next message for that thread.
+// Threads that already have windows, which is every thread when the mod is
+// enabled in a Photoshop that is already running. The CBT hook has to go up for
+// them here, because a dropdown list created before it would never be seen
+// otherwise. A thread hook can be installed from any thread, so this works from
+// the engine's. At process start there is nothing to find yet, and
+// EnsureThreadHooks picks the threads up from their first paint instead.
+//
+// This waits for Wh_ModAfterInit rather than running in Wh_ModInit for two
+// reasons. The function hooks are not applied until Wh_ModInit returns, so a
+// thread found earlier would be hooked before the hooks behind it were live.
+// And Wh_ModUninit is not called when Wh_ModInit returns FALSE, so anything
+// installed on that path would outlive the image: a SetWindowsHookEx procedure
+// still registered against an unmapped DLL is a crash on the next message for
+// that thread.
 void Wh_ModAfterInit() {
-    // When the mod is enabled in a Photoshop that is already running, the CBT
-    // hook can go up immediately - and it needs to, because a dropdown list
-    // created before it would never be seen. A thread hook can be installed from
-    // any thread, so this works from the engine's. At process start there is
-    // nothing to find yet, and EnsureThreadHooks picks it up from the first
-    // paint instead.
     EnumWindows([](HWND hWnd, LPARAM) WINAPI -> BOOL {
         DWORD pid = 0;
         DWORD tid = GetWindowThreadProcessId(hWnd, &pid);
