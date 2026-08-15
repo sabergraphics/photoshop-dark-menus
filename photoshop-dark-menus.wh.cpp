@@ -8,7 +8,7 @@
 // @twitter       https://x.com/SaberNaeemi
 // @homepage      https://www.sabernaeemi.com
 // @include       Photoshop.exe
-// @compilerOptions -lUser32 -lGdi32 -lComctl32
+// @compilerOptions -luser32 -lgdi32 -lcomctl32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -237,9 +237,24 @@ thread_local int tl_menuDepth = 0;
 thread_local int tl_menuDrawDepth = 0;
 thread_local int tl_comboListDepth = 0;
 
-// Set while this thread is painting on the mod's behalf, so our own drawing
+// Raised while this thread is painting on the mod's behalf, so our own drawing
 // does not re-enter the hooks.
-thread_local bool tl_inOurPaint = false;
+thread_local int tl_ourPaintDepth = 0;
+
+// Raises one of the counters above for a scope. A counter left raised is the
+// one failure here that is both permanent and impossible to miss - the thread
+// paints everything in the mod's colors until Photoshop restarts - so they are
+// closed by a destructor rather than by a statement an unwind could skip.
+struct DepthGuard {
+    explicit DepthGuard(int* pDepth) : pDepth(pDepth) { (*pDepth)++; }
+    ~DepthGuard() { if (*pDepth > 0) (*pDepth)--; }
+
+    DepthGuard(const DepthGuard&) = delete;
+    DepthGuard& operator=(const DepthGuard&) = delete;
+
+private:
+    int* pDepth;
+};
 
 // The hooks belong to a UI thread rather than to a menu: dropdown lists are
 // painted with no menu in sight, and both they and the menu popups are created
@@ -286,7 +301,7 @@ bool ParseHexColor(PCWSTR hexStr, COLORREF* pOut) {
     }
 
     unsigned int r, g, b;
-    if (allHex && len == 6 && swscanf_s(p, L"%02x%02x%02x", &r, &g, &b) == 3) {
+    if (allHex && len == 6 && swscanf_s(p, L"%2x%2x%2x", &r, &g, &b) == 3) {
         *pOut = RGB(r, g, b);
         return true;
     }
@@ -571,12 +586,13 @@ void PaintPopupBorder(HWND hWnd, HDC hdcTarget) {
     HDC hdc = hdcTarget ? hdcTarget : GetWindowDC(hWnd);
     if (!hdc) return;
 
-    tl_inOurPaint = true;
-    for (int i = 0; i < frame && rc.right > rc.left && rc.bottom > rc.top; i++) {
-        FrameRect(hdc, &rc, hBorder);
-        InflateRect(&rc, -1, -1);
+    {
+        DepthGuard guard(&tl_ourPaintDepth);
+        for (int i = 0; i < frame && rc.right > rc.left && rc.bottom > rc.top; i++) {
+            FrameRect(hdc, &rc, hBorder);
+            InflateRect(&rc, -1, -1);
+        }
     }
-    tl_inOurPaint = false;
 
     if (!hdcTarget) ReleaseDC(hWnd, hdc);
 }
@@ -695,10 +711,8 @@ LRESULT CALLBACK ComboListSubclassProc(HWND hWnd,
         return DefSubclassProc(hWnd, uMsg, wParam, lParam);
     }
 
-    tl_comboListDepth++;
-    LRESULT result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
-    tl_comboListDepth--;
-    return result;
+    DepthGuard guard(&tl_comboListDepth);
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
 // Subclassed whatever the setting says, for the same reason the popups are: the
@@ -862,9 +876,23 @@ bool IsMenuItemDraw(const DRAWITEMSTRUCT* di) {
     return di->CtlType == ODT_MENU;
 }
 
+// A dropping combo box produces two of these on the way past a WH_CALLWNDPROC
+// hook, and both are wanted: the inner one the ComboLBox sends its parent
+// (ODT_LISTBOX, hwndItem the list) and the outer one the combo forwards to the
+// application (ODT_COMBOBOX, hwndItem the combo). A plain owner-drawn list box
+// looks exactly like the first of those and is not a dropdown at all, so the
+// class is checked rather than the type alone: Photoshop's own lists are all
+// combo boxes, while a third-party plugin dialog is free to own-draw a list box
+// that fills its own light background and then draws text in whichever system
+// color it asks for - which this mod would otherwise answer in list colors and
+// leave light on light.
+//
+// Both the opening and the closing hook go through here, so the two stay
+// symmetric by construction.
 bool IsListItemDraw(const DRAWITEMSTRUCT* di) {
-    return (di->CtlType == ODT_LISTBOX || di->CtlType == ODT_COMBOBOX) &&
-           !(di->itemState & ODS_COMBOBOXEDIT);
+    if (di->itemState & ODS_COMBOBOXEDIT) return false;
+    if (di->CtlType == ODT_COMBOBOX) return true;
+    return di->CtlType == ODT_LISTBOX && IsComboListWindow(di->hwndItem);
 }
 
 // Not every row's text color is asked for. Some of Photoshop's list drawing
@@ -1019,7 +1047,7 @@ DWORD WINAPI GetSysColor_Hook(int nIndex) {
     EnsureThreadHooks();
 
     COLORREF color;
-    if (!tl_inOurPaint) {
+    if (tl_ourPaintDepth == 0) {
         if (tl_menuDrawDepth > 0 && ColorForSysColor(nIndex, &color)) return color;
         if (tl_comboListDepth > 0 && ColorForDropdown(nIndex, &color)) return color;
     }
@@ -1030,7 +1058,7 @@ decltype(&GetSysColorBrush) GetSysColorBrush_Original;
 HBRUSH WINAPI GetSysColorBrush_Hook(int nIndex) {
     EnsureThreadHooks();
 
-    if (!tl_inOurPaint) {
+    if (tl_ourPaintDepth == 0) {
         // Callers may cache this handle for the process lifetime, so the
         // brushes it hands out can never be deleted. See Wh_ModUninit.
         HBRUSH hBrush = nullptr;
@@ -1048,7 +1076,7 @@ decltype(&FillRect) FillRect_Original;
 int WINAPI FillRect_Hook(HDC hdc, const RECT* lprc, HBRUSH hbr) {
     bool inMenu = tl_menuDrawDepth > 0;
     bool inList = tl_comboListDepth > 0;
-    if ((!inMenu && !inList) || tl_inOurPaint || !lprc) {
+    if ((!inMenu && !inList) || tl_ourPaintDepth > 0 || !lprc) {
         return FillRect_Original(hdc, lprc, hbr);
     }
 
@@ -1086,7 +1114,7 @@ int WINAPI FillRect_Hook(HDC hdc, const RECT* lprc, HBRUSH hbr) {
 
 decltype(&PatBlt) PatBlt_Original;
 BOOL WINAPI PatBlt_Hook(HDC hdc, int x, int y, int w, int h, DWORD rop) {
-    if (tl_menuDrawDepth <= 0 || tl_inOurPaint || rop != PATCOPY) {
+    if (tl_menuDrawDepth <= 0 || tl_ourPaintDepth > 0 || rop != PATCOPY) {
         return PatBlt_Original(hdc, x, y, w, h, rop);
     }
 
@@ -1112,14 +1140,47 @@ void Wh_ModSettingsChanged() {
 BOOL Wh_ModInit() {
     LoadSettings();
 
-    if (!WindhawkUtils::SetFunctionHook(TrackPopupMenu, TrackPopupMenu_Hook, &TrackPopupMenu_Original)) Wh_Log(L"Failed to hook TrackPopupMenu");
-    if (!WindhawkUtils::SetFunctionHook(TrackPopupMenuEx, TrackPopupMenuEx_Hook, &TrackPopupMenuEx_Original)) Wh_Log(L"Failed to hook TrackPopupMenuEx");
+    // Every other hook failing degrades the result: a menu themed less
+    // completely, or a dropdown list left alone. These two are the entry points
+    // the whole mod hangs off - nothing else raises tl_menuDepth, so without one
+    // of them no popup is ever stamped and no color is ever overridden. Losing
+    // both is worth failing over rather than running as a mod that appears
+    // installed and does nothing.
+    bool menuEntryHooked = false;
+    if (WindhawkUtils::SetFunctionHook(TrackPopupMenu, TrackPopupMenu_Hook, &TrackPopupMenu_Original)) {
+        menuEntryHooked = true;
+    } else {
+        Wh_Log(L"Failed to hook TrackPopupMenu");
+    }
+    if (WindhawkUtils::SetFunctionHook(TrackPopupMenuEx, TrackPopupMenuEx_Hook, &TrackPopupMenuEx_Original)) {
+        menuEntryHooked = true;
+    } else {
+        Wh_Log(L"Failed to hook TrackPopupMenuEx");
+    }
+
     if (!WindhawkUtils::SetFunctionHook(GetSysColor, GetSysColor_Hook, &GetSysColor_Original)) Wh_Log(L"Failed to hook GetSysColor");
     if (!WindhawkUtils::SetFunctionHook(GetSysColorBrush, GetSysColorBrush_Hook, &GetSysColorBrush_Original)) Wh_Log(L"Failed to hook GetSysColorBrush");
     if (!WindhawkUtils::SetFunctionHook(FillRect, FillRect_Hook, &FillRect_Original)) Wh_Log(L"Failed to hook FillRect");
     if (!WindhawkUtils::SetFunctionHook(PatBlt, PatBlt_Hook, &PatBlt_Original)) Wh_Log(L"Failed to hook PatBlt");
     if (!WindhawkUtils::SetFunctionHook(CreateWindowExW, CreateWindowExW_Hook, &CreateWindowExW_Original)) Wh_Log(L"Failed to hook CreateWindowExW");
 
+    if (!menuEntryHooked) {
+        Wh_Log(L"Neither TrackPopupMenu nor TrackPopupMenuEx could be hooked; "
+               L"there is nothing the mod could theme.");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+// The sweep for windows that already exist waits for this rather than running
+// in Wh_ModInit, for two reasons. The hooks registered above are not applied
+// until Wh_ModInit returns, so a thread found early would be hooked before the
+// function hooks behind it were live. And Wh_ModUninit is not called when
+// Wh_ModInit returns FALSE, so anything installed on that path would outlive
+// the image: a SetWindowsHookEx procedure still registered against an unmapped
+// DLL is a crash on the next message for that thread.
+void Wh_ModAfterInit() {
     // When the mod is enabled in a Photoshop that is already running, the CBT
     // hook can go up immediately - and it needs to, because a dropdown list
     // created before it would never be seen. A thread hook can be installed from
@@ -1132,8 +1193,6 @@ BOOL Wh_ModInit() {
         if (tid && pid == GetCurrentProcessId()) InstallThreadHook(tid);
         return TRUE;
     }, 0);
-
-    return TRUE;
 }
 
 void Wh_ModUninit() {
