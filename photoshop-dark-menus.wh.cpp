@@ -1,14 +1,14 @@
 // ==WindhawkMod==
 // @id            photoshop-dark-menus
 // @name          Photoshop Dark Menus
-// @description   Enables dark mode and custom colors for the menus, dropdown lists and dialog title bars in Adobe Photoshop.
-// @version       1.2.0
+// @description   Enables dark mode and custom colors for the menus, dropdown lists, message boxes and dialog title bars in Adobe Photoshop.
+// @version       1.3.0
 // @author        Saber Naeemi
 // @github        https://github.com/sabergraphics
 // @twitter       https://x.com/SaberNaeemi
 // @homepage      https://www.sabernaeemi.com
 // @include       Photoshop.exe
-// @compilerOptions -luser32 -lgdi32 -lcomctl32 -ldwmapi
+// @compilerOptions -luser32 -lgdi32 -lcomctl32 -ldwmapi -luxtheme
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -16,8 +16,9 @@
 # Photoshop Dark Menus
 
 This Windhawk mod enables dark menus (top-bar dropdowns and context menus),
-dark dropdown lists and dark dialog title bars in Adobe Photoshop on Windows,
-with fully customizable colors. No other mod is needed alongside it.
+dark dropdown lists, dark message boxes and dark dialog title bars in Adobe
+Photoshop on Windows, with fully customizable colors. No other mod is needed
+alongside it.
 
 Everything happens inside the Photoshop process. No system colors are changed
 and no other application is affected.
@@ -25,12 +26,13 @@ and no other application is affected.
 ## Photoshop Dark Menus or Adobe Dark Menus
 
 [Adobe Dark Menus](https://windhawk.net/mods/adobe-dark-menus) is a newer mod
-from the same author. In Photoshop the two do the same thing. Adobe Dark Menus
-also covers Illustrator, InDesign, After Effects, Premiere Pro and other Adobe
-apps, along with their menu bars.
+from the same author. It also covers Illustrator, InDesign, After Effects,
+Premiere Pro and other Adobe apps, along with their menu bars. In Photoshop it
+does what this mod does, except that it leaves message boxes light.
 
 - **Photoshop Dark Menus** (this mod) changes Photoshop and nothing else. Pick
-  it if Photoshop is the only Adobe app you want changed.
+  it if Photoshop is the only Adobe app you want changed, or if you want its
+  message boxes dark as well.
 - **Adobe Dark Menus** handles all the Adobe apps in one mod. Pick it if you
   want a single mod for all of them.
 
@@ -55,6 +57,7 @@ Adobe Dark Menus, disable this mod.
 - **Border Color**: Color of the popup frame. Leave empty to keep the system frame (Default: `#2D2D2D`).
 - **Theme Dropdown Lists**: Darken the dropdown lists as well, using the colors above (Default: on).
 - **Darken Menus Windows Draws**: Use Windows' dark menu theme for the few menus Windows draws itself, such as the context menu on a document tab (Default: on).
+- **Darken Message Boxes**: Darken Photoshop's message boxes, such as the "Save changes" prompt, using the colors above (Default: on).
 - **Dark Title Bars**: Color the title bars of Photoshop's dialogs to match the menus (Default: on).
 - **Title Bar Color**: Leave empty to match the menu background color (Default: empty).
 - **Title Bar Text Color**: Leave empty to let Windows choose, which dims the text of an inactive window (Default: empty).
@@ -135,6 +138,19 @@ drawing, which is off unless a process asks for it. The mod asks for it with
 `dark-menus` mod uses, and puts the process back when it is disabled. This needs
 Windows 10 1903 or later.
 
+### Message boxes
+
+Photoshop's alerts, such as the prompt to save changes before closing, are its
+own `PSDialogBox` window holding only stock Windows controls: an icon, a line
+of text and push buttons. Photoshop paints the white background itself, and
+it builds the box while the box is already showing. So the window is
+subclassed, the background is painted in the menu color in place of
+Photoshop's, the text is answered in the menu colors, and what the box holds
+is checked again each time it paints, giving each push button Windows' own
+dark button theme as it appears. Only a box that holds nothing but those
+controls is changed, so any dialog Photoshop paints itself is left as it is.
+The dark buttons need Windows 10 1809 or later.
+
 ### Title bars
 
 Windows 11 lets a process color a standard title bar through
@@ -152,7 +168,10 @@ framework and already follows Photoshop's interface theme; this mod covers the
 dropdown popups and context menus.
 
 Menus Windows draws itself take Windows' own dark colors rather than the colors
-set here.
+set here, and so do the buttons in a message box.
+
+A message box holding anything beyond an icon, text and push buttons, such as a
+"Don't show again" check box, stays light.
 
 The font browser and the Glyphs panel's character cells stay light too, and are
 outside what this mod can reach: Photoshop paints those from its own palette
@@ -178,6 +197,11 @@ Questions go in
 [Discussions](https://github.com/sabergraphics/photoshop-dark-menus/discussions).
 
 ## Changelog
+
+### 1.3.0
+- Photoshop's message boxes, such as the prompt to save changes before closing
+  and its warnings, are dark too, with dark buttons. Turn it off with
+  **Darken Message Boxes**.
 
 ### 1.2.0
 - The menus Windows draws itself in Photoshop, such as the context menu on a
@@ -242,6 +266,11 @@ Questions go in
   $description: >-
     Use Windows' dark menu theme for the few menus in Photoshop that Windows
     draws itself, such as the context menu on a document tab or a panel tab.
+- DarkMessageBoxes: true
+  $name: "Darken Message Boxes"
+  $description: >-
+    Darken Photoshop's message boxes, such as the "Save changes" prompt and its
+    warnings, using the colors above. Its other dialogs are dark already.
 - ThemeTitleBars: true
   $name: "Dark Title Bars"
   $description: >-
@@ -261,6 +290,7 @@ Questions go in
 #include <windows.h>
 #include <commctrl.h>
 #include <dwmapi.h>
+#include <uxtheme.h>
 #include <windhawk_api.h>
 #include <windhawk_utils.h>
 #include <wchar.h>
@@ -296,6 +326,7 @@ std::atomic<COLORREF> g_colTitleBarText{kDwmColorDefault};
 std::atomic<bool> g_themeDropdowns{true};
 std::atomic<bool> g_themeWindowsMenus{true};
 std::atomic<bool> g_themeTitleBars{true};
+std::atomic<bool> g_darkMessageBoxes{true};
 
 // Whether the process is actually in dark menu mode. Stays false with the
 // setting on before Windows 10 1903.
@@ -442,6 +473,7 @@ void LoadSettings() {
     g_themeDropdowns.store(Wh_GetIntSetting(L"ThemeDropdowns") != 0, std::memory_order_relaxed);
     g_themeWindowsMenus.store(Wh_GetIntSetting(L"ThemeWindowsMenus") != 0, std::memory_order_relaxed);
     g_themeTitleBars.store(Wh_GetIntSetting(L"ThemeTitleBars") != 0, std::memory_order_relaxed);
+    g_darkMessageBoxes.store(Wh_GetIntSetting(L"DarkMessageBoxes") != 0, std::memory_order_relaxed);
 
     PublishColor(&g_colMenu, &g_hMenuBrush,
                  ParseHexColorOr(WindhawkUtils::StringSetting::make(L"MenuBgColor").get(), RGB(45, 45, 45)));
@@ -1288,6 +1320,281 @@ void SubclassIfKnown(HWND hWnd) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Message boxes
+// ---------------------------------------------------------------------------
+
+// Photoshop's alerts, such as "Save changes to the Adobe Photoshop document
+// before closing?", are its own PSDialogBox window holding nothing but stock
+// controls: an icon, a line of text and push buttons. Measured with alerts open.
+// Photoshop paints the white background itself, in its own WM_PAINT, and it
+// builds the box while the box is already showing: when the mod first saw one,
+// only its first button existed. Photoshop's other dialogs are dark already,
+// because it paints their controls itself.
+constexpr PCWSTR kPsDialogClass = L"PSDialogBox";
+
+// Windows' dark push button theme arrived in Windows 10 1809.
+constexpr DWORD kFirstBuildWithDarkButtons = 17763;
+std::atomic<DWORD> g_windowsBuild{0};
+
+// More children than any alert has. It only bounds the walk.
+constexpr int kMaxAlertChildren = 32;
+
+enum class AlertPart { Text, Button, Other };
+
+// A static that Windows draws, text or icon, or a push button. Anything else
+// means a dialog the mod has not been measured against, a check box for one, or
+// a control Photoshop paints itself.
+AlertPart ClassifyAlertPart(HWND hWnd) {
+    WCHAR cls[16];
+    if (!GetClassNameW(hWnd, cls, ARRAYSIZE(cls))) return AlertPart::Other;
+
+    LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    if (_wcsicmp(cls, L"Static") == 0) {
+        switch (style & SS_TYPEMASK) {
+            case SS_LEFT:
+            case SS_CENTER:
+            case SS_RIGHT:
+            case SS_ICON:
+            case SS_SIMPLE:
+            case SS_LEFTNOWORDWRAP:
+                return AlertPart::Text;
+        }
+        return AlertPart::Other;
+    }
+    if (_wcsicmp(cls, L"Button") == 0) {
+        LONG_PTR type = style & BS_TYPEMASK;
+        if (type == BS_PUSHBUTTON || type == BS_DEFPUSHBUTTON) return AlertPart::Button;
+    }
+    return AlertPart::Other;
+}
+
+inline bool IsPsDialog(HWND hWnd) {
+    WCHAR cls[16];
+    return GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) && wcscmp(cls, kPsDialogClass) == 0 &&
+           !(GetWindowLongPtrW(hWnd, GWL_STYLE) & WS_CHILD);
+}
+
+bool HoldsOnlyAlertParts(HWND hWnd) {
+    int buttons = 0, children = 0;
+    for (HWND hChild = GetWindow(hWnd, GW_CHILD); hChild; hChild = GetWindow(hChild, GW_HWNDNEXT)) {
+        if (++children > kMaxAlertChildren) return false;
+        switch (ClassifyAlertPart(hChild)) {
+            case AlertPart::Button: buttons++; break;
+            case AlertPart::Text:   break;
+            case AlertPart::Other:  return false;
+        }
+    }
+    return buttons > 0;
+}
+
+inline bool WantDarkAlert(HWND hWnd) {
+    return g_darkMessageBoxes.load(std::memory_order_relaxed) &&
+           !g_unloading.load(std::memory_order_relaxed) && HoldsOnlyAlertParts(hWnd);
+}
+
+// The PSDialogBox windows the mod watches, and the buttons it has given the dark
+// theme, each with the box it belongs to.
+std::unordered_set<HWND> g_psDialogs;
+std::unordered_map<HWND, HWND> g_darkButtons;
+std::mutex g_alertsMutex;
+
+// The buttons take Windows' own dark theme, so their colors are Windows' rather
+// than the settings. Setting a theme makes a button repaint, so each one is
+// themed once, and passing null puts back the theme it had.
+void SyncAlertButtons(HWND hDlg, bool dark) {
+    std::vector<HWND> change;
+    {
+        std::lock_guard<std::mutex> lock(g_alertsMutex);
+        if (dark) {
+            int children = 0;
+            for (HWND hChild = GetWindow(hDlg, GW_CHILD); hChild && ++children <= kMaxAlertChildren;
+                 hChild = GetWindow(hChild, GW_HWNDNEXT)) {
+                if (ClassifyAlertPart(hChild) == AlertPart::Button &&
+                    g_darkButtons.try_emplace(hChild, hDlg).second) {
+                    change.push_back(hChild);
+                }
+            }
+        } else {
+            for (auto it = g_darkButtons.begin(); it != g_darkButtons.end();) {
+                if (it->second == hDlg) {
+                    change.push_back(it->first);
+                    it = g_darkButtons.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+    }
+
+    // Outside the lock, since this sends the button a message.
+    for (HWND hButton : change) {
+        SetWindowTheme(hButton, dark ? L"DarkMode_Explorer" : nullptr, nullptr);
+        InvalidateRect(hButton, nullptr, TRUE);
+    }
+}
+
+// Decided again at each paint rather than once, since the box can still be
+// gaining controls after the mod first sees it.
+bool PrepareAlert(HWND hDlg) {
+    bool dark = WantDarkAlert(hDlg);
+    SyncAlertButtons(hDlg, dark);
+    return dark;
+}
+
+// Posted to a box by a button that paints before it has been themed, so that
+// it is themed once that paint is over rather than in the middle of it.
+UINT PrepareAlertMessage() {
+    static const UINT message = RegisterWindowMessageW(L"PhotoshopDarkMenus.PrepareAlert");
+    return message;
+}
+
+void FillAlert(HWND hWnd, HDC hdc, const RECT* prc, HBRUSH hBrush) {
+    RECT rc;
+    if (!prc) {
+        if (!GetClientRect(hWnd, &rc)) return;
+        prc = &rc;
+    }
+    DepthGuard guard(&tl_ourPaintDepth);
+    FillRect(hdc, prc, hBrush);
+}
+
+// The background is answered here in full, Photoshop's own paint included, and
+// the statics after Photoshop has had its say. Anything else, or a box that does
+// not qualify, goes straight through.
+LRESULT CALLBACK AlertSubclassProc(HWND hWnd,
+                                   UINT uMsg,
+                                   WPARAM wParam,
+                                   LPARAM lParam,
+                                   [[maybe_unused]] DWORD_PTR dwRefData) {
+    HBRUSH hBrush = g_hMenuBrush.load(std::memory_order_acquire);
+
+    switch (uMsg) {
+        case WM_NCDESTROY:
+            if (!ProcessIsExiting()) {
+                std::lock_guard<std::mutex> lock(g_alertsMutex);
+                g_psDialogs.erase(hWnd);
+                std::erase_if(g_darkButtons, [hWnd](const auto& entry) { return entry.second == hWnd; });
+            }
+            break;
+
+        case WM_PAINT: {
+            if (!hBrush || !PrepareAlert(hWnd)) break;
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+            if (hdc) FillAlert(hWnd, hdc, &ps.rcPaint, hBrush);
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+
+        case WM_ERASEBKGND:
+        case WM_PRINTCLIENT:
+            if (!hBrush || !wParam || !PrepareAlert(hWnd)) break;
+            FillAlert(hWnd, (HDC)wParam, nullptr, hBrush);
+            return uMsg == WM_ERASEBKGND ? TRUE : 0;
+
+        case WM_CTLCOLORDLG:
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN: {
+            LRESULT result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            if (!hBrush || !wParam || !WantDarkAlert(hWnd)) return result;
+
+            if (uMsg == WM_CTLCOLORBTN && lParam) {
+                bool themed;
+                {
+                    std::lock_guard<std::mutex> lock(g_alertsMutex);
+                    themed = g_darkButtons.contains((HWND)lParam);
+                }
+                if (!themed) PostMessageW(hWnd, PrepareAlertMessage(), 0, 0);
+            }
+
+            SetTextColor((HDC)wParam, g_colText.load(std::memory_order_relaxed));
+            SetBkColor((HDC)wParam, g_colMenu.load(std::memory_order_relaxed));
+            return (LRESULT)hBrush;
+        }
+
+        default:
+            if (uMsg == PrepareAlertMessage()) {
+                PrepareAlert(hWnd);
+                return 0;
+            }
+            break;
+    }
+
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+void RedrawAlert(HWND hWnd) {
+    RedrawWindow(hWnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
+}
+
+// Called as a window is shown and, as a catch-all, at every frame paint. Every
+// PSDialogBox is watched, since what it holds is only known once it paints. The
+// class is checked first, so any other window costs one call.
+void WatchPsDialog(HWND hWnd) {
+    if (!g_darkMessageBoxes.load(std::memory_order_relaxed) || ProcessIsExiting() ||
+        g_unloading.load(std::memory_order_relaxed) ||
+        g_windowsBuild.load(std::memory_order_relaxed) < kFirstBuildWithDarkButtons ||
+        !IsPsDialog(hWnd)) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_alertsMutex);
+        if (g_psDialogs.contains(hWnd)) return;
+    }
+
+    if (!WindhawkUtils::SetWindowSubclassFromAnyThread(hWnd, AlertSubclassProc, 0)) {
+        Wh_Log(L"Failed to subclass Photoshop dialog %p; it stays light.", hWnd);
+        return;
+    }
+
+    if (!RecordSubclassed(g_psDialogs, g_alertsMutex, hWnd)) {
+        WindhawkUtils::RemoveWindowSubclassFromAnyThread(hWnd, AlertSubclassProc);
+        return;
+    }
+
+    RedrawAlert(hWnd);
+}
+
+void RestoreAlerts() {
+    std::vector<HWND> dialogs, buttons;
+    {
+        std::lock_guard<std::mutex> lock(g_alertsMutex);
+        dialogs.assign(g_psDialogs.begin(), g_psDialogs.end());
+        g_psDialogs.clear();
+        for (const auto& entry : g_darkButtons) buttons.push_back(entry.first);
+        g_darkButtons.clear();
+    }
+
+    for (HWND hWnd : dialogs) WindhawkUtils::RemoveWindowSubclassFromAnyThread(hWnd, AlertSubclassProc);
+    for (HWND hButton : buttons) SetWindowTheme(hButton, nullptr, nullptr);
+    for (HWND hWnd : dialogs) RedrawAlert(hWnd);
+}
+
+// On a settings change: the boxes already watched repaint in the new colors, and
+// one that is open picks the setting up.
+void SyncAlerts() {
+    if (!g_darkMessageBoxes.load(std::memory_order_relaxed)) {
+        RestoreAlerts();
+        return;
+    }
+
+    std::vector<HWND> known;
+    {
+        std::lock_guard<std::mutex> lock(g_alertsMutex);
+        known.assign(g_psDialogs.begin(), g_psDialogs.end());
+    }
+    for (HWND hWnd : known) RedrawAlert(hWnd);
+
+    EnumWindows([](HWND hWnd, LPARAM) WINAPI -> BOOL {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hWnd, &pid);
+        if (pid == GetCurrentProcessId() && IsWindowVisible(hWnd)) WatchPsDialog(hWnd);
+        return TRUE;
+    }, 0);
+}
+
 // Catches a menu popup or a dropdown list at creation, before it has painted.
 // user32 creates both for itself, so nothing exported sees them appear - only a
 // CBT hook does.
@@ -1587,9 +1894,11 @@ LRESULT CALLBACK CallWndRetProcHook(int code, WPARAM wParam, LPARAM lParam) {
     if (ret->message == WM_WINDOWPOSCHANGING || ret->message == WM_WINDOWPOSCHANGED) {
         if (ret->lParam && (((const WINDOWPOS*)ret->lParam)->flags & SWP_SHOWWINDOW)) {
             ApplyTitleBar(ret->hwnd);
+            WatchPsDialog(ret->hwnd);
         }
     } else if (ret->message == WM_NCACTIVATE || ret->message == WM_NCPAINT) {
         ApplyTitleBar(ret->hwnd);
+        WatchPsDialog(ret->hwnd);
     } else if (ret->message == WM_NCDESTROY) {
         ForgetTitleBar(ret->hwnd);
     }
@@ -1824,8 +2133,10 @@ void ResolveDarkMenuApis() {
 
     RTL_OSVERSIONINFOW version = {};
     version.dwOSVersionInfoSize = sizeof(version);
-    if (!pRtlGetVersion || pRtlGetVersion(&version) != 0 ||
-        version.dwBuildNumber < kFirstBuildWithPreferredAppMode) {
+    if (pRtlGetVersion && pRtlGetVersion(&version) == 0) {
+        g_windowsBuild.store(version.dwBuildNumber, std::memory_order_relaxed);
+    }
+    if (version.dwBuildNumber < kFirstBuildWithPreferredAppMode) {
         Wh_Log(L"Windows build too old for dark menus; menus Windows draws stay light.");
         return;
     }
@@ -1865,6 +2176,7 @@ void Wh_ModSettingsChanged() {
     LoadSettings();
     ApplyDarkMenus();
     SyncTitleBars();
+    SyncAlerts();
 }
 
 BOOL Wh_ModInit() {
@@ -1936,6 +2248,7 @@ void Wh_ModAfterInit() {
     }, 0);
 
     SyncTitleBars();
+    SyncAlerts();
 }
 
 void Wh_ModUninit() {
@@ -1951,6 +2264,11 @@ void Wh_ModUninit() {
     // through ApplyTitleBar and be left dark.
     g_themeTitleBars.store(false, std::memory_order_relaxed);
     RestoreTitleBars();
+
+    // The subclass procedure lives in this image, so an alert left open must
+    // lose it before the image goes.
+    g_darkMessageBoxes.store(false, std::memory_order_relaxed);
+    RestoreAlerts();
 
     // The message hooks belong to Photoshop's UI threads, not to this one, so
     // they are released through the global map. See HookedThread.

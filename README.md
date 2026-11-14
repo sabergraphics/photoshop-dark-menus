@@ -1,14 +1,14 @@
 # Photoshop Dark Menus
 
-This Windhawk mod enables dark menus (top-bar dropdowns and context menus), dark dropdown lists and dark dialog title bars in Adobe Photoshop on Windows, with fully customizable colors. No other mod is needed alongside it.
+This Windhawk mod enables dark menus (top-bar dropdowns and context menus), dark dropdown lists, dark message boxes and dark dialog title bars in Adobe Photoshop on Windows, with fully customizable colors. No other mod is needed alongside it.
 
 Everything happens inside the Photoshop process. No system colors are changed and no other application is affected.
 
 ## Photoshop Dark Menus or Adobe Dark Menus
 
-[Adobe Dark Menus](https://windhawk.net/mods/adobe-dark-menus) ([source](https://github.com/sabergraphics/adobe-dark-menus)) is a newer mod from the same author. In Photoshop the two do the same thing. Adobe Dark Menus also covers Illustrator, InDesign, After Effects, Premiere Pro and other Adobe apps, along with their menu bars.
+[Adobe Dark Menus](https://windhawk.net/mods/adobe-dark-menus) ([source](https://github.com/sabergraphics/adobe-dark-menus)) is a newer mod from the same author. It also covers Illustrator, InDesign, After Effects, Premiere Pro and other Adobe apps, along with their menu bars. In Photoshop it does what this mod does, except that it leaves message boxes light.
 
-- **Photoshop Dark Menus** (this mod) changes Photoshop and nothing else. Pick it if Photoshop is the only Adobe app you want changed.
+- **Photoshop Dark Menus** (this mod) changes Photoshop and nothing else. Pick it if Photoshop is the only Adobe app you want changed, or if you want its message boxes dark as well.
 - **Adobe Dark Menus** handles all the Adobe apps in one mod. Pick it if you want a single mod for all of them.
 
 **Use one or the other, not both.** Both hook the same functions inside Photoshop, and running the two together has not been tested. If you switch to Adobe Dark Menus, disable this mod.
@@ -23,7 +23,7 @@ Everything happens inside the Photoshop process. No system colors are changed an
 
 - **[Windhawk](https://windhawk.net) 1.5 or later.** The mod uses the typed `SetFunctionHook` helper, which was added in 1.5.
 - **Adobe Photoshop for Windows.** Developed and tested against Photoshop 2026. The mod hooks generic Windows drawing calls rather than anything specific to a Photoshop build, so earlier versions are likely to work, but they have not been tested.
-- **Windows.** Photoshop's own menus and dropdown lists work on any build Windhawk and your Photoshop version support. Two parts need a newer Windows: the menus Windows draws itself need Windows 10 1903 or later, and colored title bars need Windows 11 (Windows 10 2004 or later gets a dark title bar without the custom color). On an older build those parts are simply left light.
+- **Windows.** Photoshop's own menus and dropdown lists work on any build Windhawk and your Photoshop version support. Three parts need a newer Windows: the menus Windows draws itself need Windows 10 1903 or later, dark message boxes need Windows 10 1809 or later, and colored title bars need Windows 11 (Windows 10 2004 or later gets a dark title bar without the custom color). On an older build those parts are simply left light.
 
 There is no toolchain to install. Windhawk compiles the mod itself with its own bundled compiler.
 
@@ -64,6 +64,7 @@ The following settings can be customized in the Windhawk mod panel:
 - **Border Color**: Color of the popup frame. Leave empty to keep the system frame (Default: `#2D2D2D`).
 - **Theme Dropdown Lists**: Darken the dropdown lists as well, using the colors above (Default: on).
 - **Darken Menus Windows Draws**: Use Windows' dark menu theme for the few menus Windows draws itself, such as the context menu on a document tab (Default: on).
+- **Darken Message Boxes**: Darken Photoshop's message boxes, such as the "Save changes" prompt, using the colors above (Default: on).
 - **Dark Title Bars**: Color the title bars of Photoshop's dialogs to match the menus (Default: on).
 - **Title Bar Color**: Leave empty to match the menu background color (Default: empty).
 - **Title Bar Text Color**: Leave empty to let Windows choose, which dims the text of an inactive window (Default: empty).
@@ -74,7 +75,9 @@ Colors can be given as `#RRGGBB` or the short `#RGB` form.
 
 The menu bar itself (File, Edit, Image, ...) is drawn by Photoshop's own UI framework and already follows Photoshop's interface theme; this mod covers the dropdown popups and context menus.
 
-Menus Windows draws itself take Windows' own dark colors rather than the colors set here.
+Menus Windows draws itself take Windows' own dark colors rather than the colors set here, and so do the buttons in a message box.
+
+A message box holding anything beyond an icon, text and push buttons, such as a "Don't show again" check box, stays light.
 
 The font browser and the Glyphs panel's character cells also stay light. Photoshop paints those from its own palette rather than from any system color, with its dark chrome and their light content coming from the same calls in the same window, so there is nothing for an in-process hook to answer. Recoloring them would mean matching color values instead, in a window class Photoshop also uses for swatches and color pickers, where a light fill is the content rather than a background.
 
@@ -101,6 +104,8 @@ So every pixel of a menu item is reachable from inside the process:
 | Dropdown row background | `GetSysColor(COLOR_WINDOW)`, or a `COLOR_HIGHLIGHT` pseudo-handle | `GetSysColor` and `FillRect` hooks, same scope |
 | Dropdown row text | `GetSysColor(COLOR_WINDOWTEXT)` in one list, `COLOR_MENUTEXT` in another | `GetSysColor` hook, same scope |
 | Menus Windows draws, such as the document tab context menu | Windows' theme engine, in light colors | uxtheme's dark menu theme, through `SetPreferredAppMode(ForceDark)` and `FlushMenuThemes` |
+| Message box background and text | Photoshop's `PSDialogBox` window, in its own paint | subclass that paints the background in place of Photoshop's and answers the text colors |
+| Message box buttons | stock push buttons, in the light theme | Windows' dark button theme, through `SetWindowTheme` |
 | Dialog title bars | DWM, in the system colors | `DwmSetWindowAttribute` with the dark flag and the caption color |
 
 The system color overrides apply **only while a menu item or a dropdown row is actually being painted**, inside a menu's `WM_DRAWITEM` or inside the list window's own paint messages, rather than for as long as a menu happens to be open. That matters because `TrackPopupMenu` runs a modal message loop which keeps dispatching to every other window on the thread, so a panel repainting behind an open menu would otherwise come out in menu colors. The popup frame is the one part drawn kernel-side, where no user-mode hook can reach it, so the popup window is subclassed and its frame repainted after the system has drawn it.
@@ -110,6 +115,8 @@ The dropdown lists are stock Win32 combo boxes: Photoshop owner-draws the rows b
 Those list windows are created once per combo box and kept for the life of the process, usually long before the mod loads, so catching them at creation is not enough. They are found instead from the messages sent while they paint: `WM_DRAWITEM` names the list in `hwndItem`, and `WM_CTLCOLORLISTBOX` names it in `lParam`. Menu popups are caught with a CBT hook at creation, with a sweep for any that already existed.
 
 The menus Windows draws itself are a different case. The theme engine paints them, below anything a hook here can reach, but it has a dark variant that is off unless a process asks for it. The mod asks for it the way [Dark mode context menus](https://windhawk.net/mods/dark-menus) does, and puts the process back when it is disabled. Those menus take Windows' own dark colors.
+
+Photoshop's message boxes, such as the prompt to save changes before closing, are its own `PSDialogBox` window holding only stock Windows controls: an icon, a line of text and push buttons. Photoshop paints the white background itself, and builds the box while it is already showing. So the mod subclasses the window, paints the background in the menu color in place of Photoshop's, answers the text in the menu colors, and checks what the box holds each time it paints, giving each push button Windows' own dark button theme as it appears. Only a box holding nothing but those controls is changed, which leaves every dialog Photoshop paints itself alone.
 
 Title bars are colored by DWM on request, so nothing is drawn: the mod sets the dark flag and the caption color on each Photoshop window with a standard title bar, which in practice means its dialogs, just before the window is shown. Photoshop's main window draws its own title bar and is left alone. This is measured per window rather than decided by class, since the main window and the dialogs belong to the same app.
 
