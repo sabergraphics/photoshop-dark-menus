@@ -1,26 +1,42 @@
 // ==WindhawkMod==
 // @id            photoshop-dark-menus
 // @name          Photoshop Dark Menus
-// @description   Enables dark mode and custom colors for the menus and dropdown lists in Adobe Photoshop.
-// @version       1.1.0
+// @description   Enables dark mode and custom colors for the menus, dropdown lists and dialog title bars in Adobe Photoshop.
+// @version       1.2.0
 // @author        Saber Naeemi
 // @github        https://github.com/sabergraphics
 // @twitter       https://x.com/SaberNaeemi
 // @homepage      https://www.sabernaeemi.com
 // @include       Photoshop.exe
-// @compilerOptions -luser32 -lgdi32 -lcomctl32
+// @compilerOptions -luser32 -lgdi32 -lcomctl32 -ldwmapi
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
 /*
 # Photoshop Dark Menus
 
-This Windhawk mod enables dark menus (top-bar dropdowns and context menus) and
-dark dropdown lists in Adobe Photoshop on Windows, with fully customizable
-colors.
+This Windhawk mod enables dark menus (top-bar dropdowns and context menus),
+dark dropdown lists and dark dialog title bars in Adobe Photoshop on Windows,
+with fully customizable colors. No other mod is needed alongside it.
 
 Everything happens inside the Photoshop process. No system colors are changed
 and no other application is affected.
+
+## Photoshop Dark Menus or Adobe Dark Menus
+
+[Adobe Dark Menus](https://windhawk.net/mods/adobe-dark-menus) is a newer mod
+from the same author. In Photoshop the two do the same thing. Adobe Dark Menus
+also covers Illustrator, InDesign, After Effects, Premiere Pro and other Adobe
+apps, along with their menu bars.
+
+- **Photoshop Dark Menus** (this mod) changes Photoshop and nothing else. Pick
+  it if Photoshop is the only Adobe app you want changed.
+- **Adobe Dark Menus** handles all the Adobe apps in one mod. Pick it if you
+  want a single mod for all of them.
+
+**Use one or the other, not both.** Both hook the same functions inside
+Photoshop, and running the two together has not been tested. If you switch to
+Adobe Dark Menus, disable this mod.
 
 ## Screenshots
 
@@ -38,26 +54,25 @@ and no other application is affected.
 - **Disabled Text Color**: Text color for disabled menu items (Default: `#808080`).
 - **Border Color**: Color of the popup frame. Leave empty to keep the system frame (Default: `#2D2D2D`).
 - **Theme Dropdown Lists**: Darken the dropdown lists as well, using the colors above (Default: on).
+- **Darken Menus Windows Draws**: Use Windows' dark menu theme for the few menus Windows draws itself, such as the context menu on a document tab (Default: on).
+- **Dark Title Bars**: Color the title bars of Photoshop's dialogs to match the menus (Default: on).
+- **Title Bar Color**: Leave empty to match the menu background color (Default: empty).
+- **Title Bar Text Color**: Leave empty to let Windows choose, which dims the text of an inactive window (Default: empty).
 
 Colors can be given as `#RRGGBB` or the short `#RGB` form.
 
 ## Relationship to the `dark-menus` mod
 
-The system-wide [Dark mode context menus](https://windhawk.net/mods/dark-menus)
-(`dark-menus`) mod does **not** cover the menus this one covers. The two are
-complementary rather than alternatives, and it is worth running both.
+Earlier versions recommended running the system-wide
+[Dark mode context menus](https://windhawk.net/mods/dark-menus) (`dark-menus`)
+mod alongside this one, for the few menus in Photoshop that Windows draws. This
+mod now darkens those itself, the same way `dark-menus` does, so it is no
+longer needed for Photoshop.
 
-`dark-menus` puts a process into uxtheme's dark menu theme with
-`SetPreferredAppMode` + `FlushMenuThemes`, which reaches the menus uxtheme
-itself draws. Photoshop's own menus are not among them: it owner-draws every
-item with plain GDI, so there is nothing for that theme to attach to. This mod
-intercepts Photoshop's own drawing instead, and adds per-color customization
-scoped to the one application.
-
-The reverse holds too. A few menus in Photoshop are put up by Windows rather
-than drawn by Photoshop - the context menu on a panel tab, for one - and those
-are painted by the theming engine, below the level any in-process hook here can
-reach. `dark-menus` darkens exactly those. Between them the two cover the set.
+If you run `dark-menus` for your other apps, it can stay on. It can also
+rewrite the menu background this mod sets, though, so if Photoshop's menus come
+out in its colors rather than yours, exclude `Photoshop.exe` from it in its
+Advanced settings.
 
 ## How it works
 
@@ -85,13 +100,16 @@ So every pixel of a menu item is reachable from inside the process:
   system colors. "While a menu is open" would be far too broad: a menu runs a
   modal message loop that keeps dispatching to every other window on the thread,
   and an unrelated repaint would pick the menu colors up.
-- `MENUINFO::hbrBack` is stamped on each popup (and its submenus) at
-  `WM_INITMENUPOPUP`, covering the popup background that the system paints
-  around the owner-drawn items.
+- `MENUINFO::hbrBack` is stamped on each popup Photoshop draws, submenus
+  included, at `WM_INITMENUPOPUP`, covering the popup background that the
+  system paints around the owner-drawn items.
 - The popup's non-client frame is the one part drawn kernel-side, from the 3D
   colors, where no user-mode hook can reach it - so the popup is subclassed at
   creation and the frame is repainted with the border color after it. Set
   **Border Color** empty to leave the system frame alone.
+- The scroll arrows of a menu too long for the screen are drawn kernel-side
+  too, in the system menu text color, which is close to invisible on a dark
+  menu. The same subclass recolors them to the text color after each scroll.
 
 The dropdown lists - the Layers panel blend mode list, the options bar lists,
 the Glyphs panel lists - are stock Win32 combo boxes whose list is user32's own
@@ -102,7 +120,30 @@ asks for where another fills them with a `(HBRUSH)(COLOR_X + 1)` pseudo-handle.
 Both routes are therefore covered, over a table that maps every background index
 to the background color and every text index to the text color. The list window
 is subclassed so that all of it applies only while that list is painting, which
-leaves every other control reading those same colors alone.
+leaves every other control reading those same colors alone. Only lists that
+Photoshop draws itself and that drop down are themed: a stock list, as some
+plugin dialogs use, keeps the system colors, since Windows fills its background
+from a brush no hook sees.
+
+### Menus Windows draws
+
+A few menus in Photoshop are left to Windows, such as the context menu on a
+document tab or a panel tab. Windows paints those through its theme engine, so
+none of the above reaches them. The theme engine has a dark variant of that
+drawing, which is off unless a process asks for it. The mod asks for it with
+`SetPreferredAppMode(ForceDark)` and `FlushMenuThemes`, the technique the
+`dark-menus` mod uses, and puts the process back when it is disabled. This needs
+Windows 10 1903 or later.
+
+### Title bars
+
+Windows 11 lets a process color a standard title bar through
+`DwmSetWindowAttribute`, so nothing is drawn here: the mod sets
+`DWMWA_USE_IMMERSIVE_DARK_MODE` and `DWMWA_CAPTION_COLOR` on each Photoshop
+window with a standard title bar, which in practice means its dialogs, and puts
+them back when it is disabled. On Windows 10 2004 or later the dark flag still
+gives a dark title bar, without the custom color. Photoshop's main window draws
+its own title bar and is left alone.
 
 ## Scope
 
@@ -110,9 +151,8 @@ The menu bar itself (File, Edit, Image, ...) is drawn by Photoshop's own UI
 framework and already follows Photoshop's interface theme; this mod covers the
 dropdown popups and context menus.
 
-Menus that Windows pops up through its own internal paths, without going through
-the exported `TrackPopupMenu` / `TrackPopupMenuEx` - a window's system menu, for
-example - are outside the reach of an in-process hook and keep the system colors.
+Menus Windows draws itself take Windows' own dark colors rather than the colors
+set here.
 
 The font browser and the Glyphs panel's character cells stay light too, and are
 outside what this mod can reach: Photoshop paints those from its own palette
@@ -138,6 +178,24 @@ Questions go in
 [Discussions](https://github.com/sabergraphics/photoshop-dark-menus/discussions).
 
 ## Changelog
+
+### 1.2.0
+- The menus Windows draws itself in Photoshop, such as the context menu on a
+  document tab or a panel tab, are dark too, so the Dark mode context menus mod
+  is no longer needed alongside this one. Turn it off with **Darken Menus
+  Windows Draws**.
+- Dialog title bars are dark, in a color of your choice. Turn it off with
+  **Dark Title Bars**.
+- The scroll arrows of long menus are drawn in the menu text color instead of
+  black, which was close to invisible on a dark menu, and the border no longer
+  grows thicker above and below them.
+- Fixed a possible crash when Photoshop closes.
+- Fixed a case where dropdown list colors could stay on after the list was gone.
+- Dropdown lists that Photoshop does not draw itself, as in some plugin dialogs,
+  keep their normal colors instead of getting light text on a light background.
+- Only menus Photoshop draws itself get the custom background, so a menu Windows
+  draws keeps the look of its theme.
+- Safer when the mod is turned off or updated while Photoshop is running.
 
 ### 1.1.0
 - Dropdown lists are themed as well, using the same colors - the Layers panel
@@ -179,11 +237,30 @@ Questions go in
   $description: >-
     Also darken the dropdown lists, such as the Layers panel blend mode list,
     using the colors above.
+- ThemeWindowsMenus: true
+  $name: "Darken Menus Windows Draws"
+  $description: >-
+    Use Windows' dark menu theme for the few menus in Photoshop that Windows
+    draws itself, such as the context menu on a document tab or a panel tab.
+- ThemeTitleBars: true
+  $name: "Dark Title Bars"
+  $description: >-
+    Color the title bars of Photoshop's dialogs to match the menus. The main
+    window draws its own title bar and is left alone.
+- TitleBarColor: ""
+  $name: "Title Bar Color"
+  $description: Leave empty to match Menu Background Color.
+- TitleBarTextColor: ""
+  $name: "Title Bar Text Color"
+  $description: >-
+    Leave empty to let Windows choose, which dims the text on a window that is
+    not active.
 */
 // ==/WindhawkModSettings==
 
 #include <windows.h>
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <windhawk_api.h>
 #include <windhawk_utils.h>
 #include <wchar.h>
@@ -211,7 +288,18 @@ std::atomic<COLORREF> g_colGray{RGB(128, 128, 128)};
 std::atomic<COLORREF> g_colSeparator{RGB(56, 56, 56)};
 std::atomic<COLORREF> g_colBorder{CLR_INVALID};
 
+// DWMWA_COLOR_DEFAULT: whatever Windows would use.
+constexpr COLORREF kDwmColorDefault = 0xFFFFFFFF;
+std::atomic<COLORREF> g_colTitleBar{RGB(45, 45, 45)};
+std::atomic<COLORREF> g_colTitleBarText{kDwmColorDefault};
+
 std::atomic<bool> g_themeDropdowns{true};
+std::atomic<bool> g_themeWindowsMenus{true};
+std::atomic<bool> g_themeTitleBars{true};
+
+// Whether the process is actually in dark menu mode. Stays false with the
+// setting on before Windows 10 1903.
+std::atomic<bool> g_darkMenusActive{false};
 
 // Brushes are published with an atomic store and never deleted - see the note
 // in Wh_ModUninit.
@@ -257,22 +345,36 @@ private:
     int* pDepth;
 };
 
-// Unlike the mod's function hooks, SetWindowsHookEx hooks are not removed by the
-// Windhawk engine, and their procedures live in the mod image - so one still
-// registered when the image is unmapped calls into freed memory on the next
-// message for that thread. The handles are tracked globally because Wh_ModUninit
-// never runs on the thread that installed them: while a menu is up that thread
-// is blocked in the modal menu loop. UnhookWindowsHookEx is not thread-affine,
-// so the handles can be released from any thread in the process.
-std::unordered_set<HHOOK> g_winHooks;
-std::mutex g_winHooksMutex;
+// What the opening hook did for each WM_DRAWITEM now on this thread's stack,
+// innermost last, so the closing hook undoes exactly that. Working it out again
+// from the message goes wrong for a list destroyed mid-draw: it no longer looks
+// like a list by then, and nothing else would lower its counter. Windows calls
+// the two hooks in strict pairs, also for a window destroyed while it handles
+// the message.
+enum class DrawKind : unsigned char { Other, Menu, List };
+constexpr int kMaxNestedDraws = 16;
+thread_local DrawKind tl_drawKinds[kMaxNestedDraws];
+thread_local int tl_drawNesting = 0;
 
-void TrackWinHook(HHOOK hHook) {
-    if (!hHook) return;
+// Windhawk does not call Wh_ModUninit when Photoshop exits, so the thread hooks
+// and the subclasses are still up while the loader destroys this module's
+// globals, and Photoshop's own DLLs are torn down after that. A window one of
+// them destroys then comes back through a subclass into a container that no
+// longer exists. So once the process is exiting, nothing here touches the
+// containers.
+using RtlDllShutdownInProgress_t = BOOLEAN(NTAPI*)();
+RtlDllShutdownInProgress_t g_pRtlDllShutdownInProgress = nullptr;
 
-    std::lock_guard<std::mutex> lock(g_winHooksMutex);
-    g_winHooks.insert(hHook);
+inline bool ProcessIsExiting() {
+    return g_pRtlDllShutdownInProgress && g_pRtlDllShutdownInProgress();
 }
+
+// Set at the start of Wh_ModUninit. A thread that is inside the mod at that
+// moment can be about to put up a hook or a subclass, and once uninit has
+// emptied its lists nothing would take that one down again. So whoever
+// registers one checks this first, and once more under the lock of the list it
+// is about to add to.
+std::atomic<bool> g_unloading{false};
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -338,6 +440,8 @@ void PublishColor(std::atomic<COLORREF>* pColor, std::atomic<HBRUSH>* pSlot, COL
 
 void LoadSettings() {
     g_themeDropdowns.store(Wh_GetIntSetting(L"ThemeDropdowns") != 0, std::memory_order_relaxed);
+    g_themeWindowsMenus.store(Wh_GetIntSetting(L"ThemeWindowsMenus") != 0, std::memory_order_relaxed);
+    g_themeTitleBars.store(Wh_GetIntSetting(L"ThemeTitleBars") != 0, std::memory_order_relaxed);
 
     PublishColor(&g_colMenu, &g_hMenuBrush,
                  ParseHexColorOr(WindhawkUtils::StringSetting::make(L"MenuBgColor").get(), RGB(45, 45, 45)));
@@ -360,6 +464,136 @@ void LoadSettings() {
         g_colBorder.store(CLR_INVALID, std::memory_order_relaxed);
         PublishBrush(&g_hBorderBrush, nullptr);
     }
+
+    // Read after the menu background, which an empty title bar color follows.
+    COLORREF colTitleBar;
+    if (!ParseHexColor(WindhawkUtils::StringSetting::make(L"TitleBarColor").get(), &colTitleBar)) {
+        colTitleBar = g_colMenu.load(std::memory_order_relaxed);
+    }
+    g_colTitleBar.store(colTitleBar, std::memory_order_relaxed);
+
+    COLORREF colTitleBarText;
+    if (!ParseHexColor(WindhawkUtils::StringSetting::make(L"TitleBarTextColor").get(), &colTitleBarText)) {
+        colTitleBarText = kDwmColorDefault;
+    }
+    g_colTitleBarText.store(colTitleBarText, std::memory_order_relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// Title bars
+// ---------------------------------------------------------------------------
+
+// DWMWINDOWATTRIBUTE values, spelled out because the names need a newer SDK.
+constexpr DWORD kDwmUseImmersiveDarkMode = 20;
+constexpr DWORD kDwmCaptionColor = 35;
+constexpr DWORD kDwmTextColor = 36;
+
+// Windows the mod has colored. The value is whether the mod turned the dark
+// flag on, so a window that was already dark stays dark when this is undone.
+std::unordered_map<HWND, bool> g_titledWindows;
+std::mutex g_titledWindowsMutex;
+
+// Photoshop's main window draws its own title bar, extending its client area
+// over that space, which leaves nothing for DWM to color. Its dialogs have
+// ordinary title bars, so this is measured per window. The side frame is
+// subtracted because a maximized window's frame hangs off the screen on all
+// sides.
+bool HasSystemTitleBar(HWND hWnd) {
+    LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    if ((style & WS_CAPTION) != WS_CAPTION || (style & WS_CHILD)) return false;
+
+    // Both rectangles come back in screen coordinates. ClientToScreen would not
+    // do: on a mirrored window client x runs right to left, so its origin is the
+    // right edge.
+    WINDOWINFO info = {};
+    info.cbSize = sizeof(info);
+    if (!GetWindowInfo(hWnd, &info)) return false;
+
+    constexpr int kMinCaptionHeight = 10;
+    int top = info.rcClient.top - info.rcWindow.top;
+    int side = info.rcClient.left - info.rcWindow.left;
+    return top - side >= kMinCaptionHeight;
+}
+
+void SetTitleBarColors(HWND hWnd, COLORREF caption, COLORREF text) {
+    DwmSetWindowAttribute(hWnd, kDwmCaptionColor, &caption, sizeof(caption));
+    DwmSetWindowAttribute(hWnd, kDwmTextColor, &text, sizeof(text));
+}
+
+// On Windows 10 the two color calls fail harmlessly, and the dark flag alone
+// still gives a dark title bar.
+void ApplyTitleBar(HWND hWnd) {
+    if (!g_themeTitleBars.load(std::memory_order_relaxed) || ProcessIsExiting() ||
+        g_unloading.load(std::memory_order_relaxed) || !HasSystemTitleBar(hWnd)) {
+        return;
+    }
+
+    // Recorded before the calls below, since a frame paint can come back
+    // through here.
+    {
+        std::lock_guard<std::mutex> lock(g_titledWindowsMutex);
+        if (!g_titledWindows.try_emplace(hWnd, false).second) return;
+    }
+
+    BOOL dark = FALSE;
+    if (FAILED(DwmGetWindowAttribute(hWnd, kDwmUseImmersiveDarkMode, &dark, sizeof(dark))) || !dark) {
+        BOOL on = TRUE;
+        if (SUCCEEDED(DwmSetWindowAttribute(hWnd, kDwmUseImmersiveDarkMode, &on, sizeof(on)))) {
+            std::lock_guard<std::mutex> lock(g_titledWindowsMutex);
+            g_titledWindows[hWnd] = true;
+        }
+    }
+
+    SetTitleBarColors(hWnd, g_colTitleBar.load(std::memory_order_relaxed),
+                      g_colTitleBarText.load(std::memory_order_relaxed));
+}
+
+void ForgetTitleBar(HWND hWnd) {
+    if (ProcessIsExiting()) return;
+
+    std::lock_guard<std::mutex> lock(g_titledWindowsMutex);
+    g_titledWindows.erase(hWnd);
+}
+
+void RestoreTitleBars() {
+    std::unordered_map<HWND, bool> windows;
+    {
+        std::lock_guard<std::mutex> lock(g_titledWindowsMutex);
+        windows.swap(g_titledWindows);
+    }
+
+    for (const auto& entry : windows) {
+        SetTitleBarColors(entry.first, kDwmColorDefault, kDwmColorDefault);
+        if (entry.second) {
+            BOOL off = FALSE;
+            DwmSetWindowAttribute(entry.first, kDwmUseImmersiveDarkMode, &off, sizeof(off));
+        }
+    }
+}
+
+// Hidden windows are left until they show, when their frames are final.
+void SyncTitleBars() {
+    if (!g_themeTitleBars.load(std::memory_order_relaxed)) {
+        RestoreTitleBars();
+        return;
+    }
+
+    std::vector<HWND> known;
+    {
+        std::lock_guard<std::mutex> lock(g_titledWindowsMutex);
+        for (const auto& entry : g_titledWindows) known.push_back(entry.first);
+    }
+    for (HWND hWnd : known) {
+        SetTitleBarColors(hWnd, g_colTitleBar.load(std::memory_order_relaxed),
+                          g_colTitleBarText.load(std::memory_order_relaxed));
+    }
+
+    EnumWindows([](HWND hWnd, LPARAM) WINAPI -> BOOL {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hWnd, &pid);
+        if (pid == GetCurrentProcessId() && IsWindowVisible(hWnd)) ApplyTitleBar(hWnd);
+        return TRUE;
+    }, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -485,9 +719,24 @@ constexpr size_t kMaxTrackedMenus = 1024;
 std::unordered_set<HMENU> g_stampedMenus;
 std::mutex g_stampedMenusMutex;
 
-void ApplyMenuBackground(HMENU hMenu) {
-    HBRUSH hBrush = g_hMenuBrush.load(std::memory_order_acquire);
-    if (!hMenu || !hBrush) return;
+// Whether Photoshop paints this menu or Windows does. Going through
+// TrackPopupMenu says nothing about it.
+bool MenuHasOwnerDrawnItems(HMENU hMenu) {
+    int count = GetMenuItemCount(hMenu);
+    for (int i = 0; i < count; i++) {
+        MENUITEMINFOW mii = {};
+        mii.cbSize = sizeof(mii);
+        mii.fMask = MIIM_FTYPE;
+        if (GetMenuItemInfoW(hMenu, (UINT)i, TRUE, &mii) && (mii.fType & MFT_OWNERDRAW)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Stamps one menu and records it.
+void StampMenu(HMENU hMenu, HBRUSH hBrush) {
+    if (ProcessIsExiting()) return;
 
     // The cap is checked before stamping, not after: a menu that is stamped but
     // not recorded would stay dark for the life of the process, which is the one
@@ -507,7 +756,7 @@ void ApplyMenuBackground(HMENU hMenu) {
 
     MENUINFO mi = {};
     mi.cbSize = sizeof(mi);
-    mi.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS;
+    mi.fMask = MIM_BACKGROUND;
     mi.hbrBack = hBrush;
     if (!SetMenuInfo(hMenu, &mi)) return;
 
@@ -518,8 +767,35 @@ void ApplyMenuBackground(HMENU hMenu) {
     g_stampedMenus.insert(hMenu);
 }
 
-// MIM_APPLYTOSUBMENUS propagates the cleared brush down each menu tree, so
-// submenus that were stamped but never opened are covered too.
+// Far deeper than any real menu nests. It only stops a walk that would never end.
+constexpr int kMaxMenuDepth = 25;
+
+// Each menu of the tree is judged on its own. MIM_APPLYTOSUBMENUS would cover
+// the tree in one call, but it would also stamp a submenu Windows draws below a
+// menu Photoshop draws. On a menu Windows draws, the brush replaces only the
+// background, while the gutter, separators and text still come from the theme.
+void StampMenuTree(HMENU hMenu, HBRUSH hBrush, int depth) {
+    bool ownerDrawn = false;
+    int count = GetMenuItemCount(hMenu);
+    for (int i = 0; i < count; i++) {
+        MENUITEMINFOW mii = {};
+        mii.cbSize = sizeof(mii);
+        mii.fMask = MIIM_FTYPE | MIIM_SUBMENU;
+        if (!GetMenuItemInfoW(hMenu, (UINT)i, TRUE, &mii)) continue;
+
+        if (mii.fType & MFT_OWNERDRAW) ownerDrawn = true;
+        if (mii.hSubMenu && depth < kMaxMenuDepth) StampMenuTree(mii.hSubMenu, hBrush, depth + 1);
+    }
+
+    if (ownerDrawn) StampMenu(hMenu, hBrush);
+}
+
+void ApplyMenuBackground(HMENU hMenu) {
+    HBRUSH hBrush = g_hMenuBrush.load(std::memory_order_acquire);
+    if (hMenu && hBrush) StampMenuTree(hMenu, hBrush, 0);
+}
+
+// Every stamped menu is in the set by itself, so each is cleared by itself too.
 void RestoreStampedMenus() {
     std::vector<HMENU> menus;
     {
@@ -533,7 +809,7 @@ void RestoreStampedMenus() {
     for (HMENU hMenu : menus) {
         MENUINFO mi = {};
         mi.cbSize = sizeof(mi);
-        mi.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS;
+        mi.fMask = MIM_BACKGROUND;
         mi.hbrBack = nullptr;
         SetMenuInfo(hMenu, &mi);
     }
@@ -546,15 +822,11 @@ int GetPopupFrameWidth(HWND hWnd, const RECT& windowRect) {
     POINT origin = { 0, 0 };
     if (!GetClientRect(hWnd, &client) || !ClientToScreen(hWnd, &origin)) return 1;
 
+    // The sides only: above and below the items, the non-client area of a long
+    // menu also holds the scroll arrows.
     int left = origin.x - windowRect.left;
-    int top = origin.y - windowRect.top;
     int right = windowRect.right - (origin.x + (client.right - client.left));
-    int bottom = windowRect.bottom - (origin.y + (client.bottom - client.top));
-
-    int frame = left;
-    if (top > frame) frame = top;
-    if (right > frame) frame = right;
-    if (bottom > frame) frame = bottom;
+    int frame = left > right ? left : right;
 
     if (frame < 1) frame = 1;
     if (frame > 4) frame = 4;
@@ -574,6 +846,10 @@ void PaintPopupBorder(HWND hWnd, HDC hdcTarget) {
     // never went through TrackPopupMenu(Ex). Painting only while this thread is
     // tracking a menu keeps the dark frame off an otherwise untouched menu.
     if (!MenuIsOpen()) return;
+
+    // A menu Windows draws keeps the frame of its theme.
+    HMENU hPopupMenu = (HMENU)SendMessageW(hWnd, MN_GETHMENU, 0, 0);
+    if (hPopupMenu && !MenuHasOwnerDrawnItems(hPopupMenu)) return;
 
     HBRUSH hBorder = g_hBorderBrush.load(std::memory_order_acquire);
     if (!hBorder) return;
@@ -601,6 +877,157 @@ void PaintPopupBorder(HWND hWnd, HDC hdcTarget) {
     if (!hdcTarget) ReleaseDC(hWnd, hdc);
 }
 
+// The kernel draws the scroll arrows of a menu too long for the screen in the
+// popup's non-client area, with no user-mode call to hook. On a menu with a
+// background brush, which is every menu this mod stamps, it draws a bare
+// triangle in COLOR_MENUTEXT when enabled and an embossed COLOR_BTNSHADOW and
+// COLOR_BTNHIGHLIGHT one when disabled. Black is close to invisible on a dark
+// menu, so both are recolored once the kernel is done.
+//
+// The recoloring must not undo itself, because a repaint can arrive with no new
+// arrow behind it. It matches exact system colors, which are gone once it has
+// run.
+bool MenuHasBackgroundBrush(HMENU hMenu) {
+    MENUINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIM_BACKGROUND;
+    return hMenu && GetMenuInfo(hMenu, &mi) && mi.hbrBack;
+}
+
+inline DWORD ToDibColor(COLORREF color) {
+    return ((DWORD)GetRValue(color) << 16) | ((DWORD)GetGValue(color) << 8) | GetBValue(color);
+}
+
+// Edits the band in place and copies back only what changed. A system color
+// that matches the band's own background is left out, since it can't be told
+// from it.
+void RecolorArrow(HDC hdc, HDC hdcBand, DWORD* pixels, int left, int top, int width, int height) {
+    DWORD back = pixels[0] & 0xFFFFFF;
+    DWORD enabled = ToDibColor(GetSysColor(COLOR_MENUTEXT));
+    DWORD shadow = ToDibColor(GetSysColor(COLOR_BTNSHADOW));
+    DWORD highlight = ToDibColor(GetSysColor(COLOR_BTNHIGHLIGHT));
+
+    bool hasEnabled = false, hasShadow = false, hasHighlight = false;
+    for (int i = 0; i < width * height; i++) {
+        DWORD value = pixels[i] & 0xFFFFFF;
+        if (value == enabled && value != back) hasEnabled = true;
+        if (value == shadow && value != back) hasShadow = true;
+        if (value == highlight && value != back) hasHighlight = true;
+    }
+
+    DWORD text = ToDibColor(g_colText.load(std::memory_order_relaxed));
+    DWORD gray = ToDibColor(g_colGray.load(std::memory_order_relaxed));
+
+    // With a text color that happens to equal COLOR_BTNSHADOW, an enabled arrow
+    // that has already been recolored looks like a disabled one. Only a disabled
+    // arrow the kernel has just drawn still has its highlight emboss.
+    if (text == shadow && !hasHighlight) hasShadow = false;
+
+    if (!hasEnabled && !hasShadow) return;
+
+    int minX = width, minY = height, maxX = -1, maxY = -1;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            DWORD& pixel = pixels[y * width + x];
+            DWORD value = pixel & 0xFFFFFF;
+            DWORD mapped = value;
+
+            if (hasEnabled) {
+                if (value == enabled) mapped = text;
+            } else if (value == shadow) {
+                mapped = gray;
+            } else if (value == highlight) {
+                mapped = back;
+            }
+
+            if (mapped != value) {
+                pixel = mapped;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+
+    if (maxX >= 0) {
+        BitBlt(hdc, left + minX, top + minY, maxX - minX + 1, maxY - minY + 1, hdcBand, minX, minY, SRCCOPY);
+    }
+}
+
+// The non-client area is at most this tall beyond the frame when it holds no arrow.
+constexpr int kMaxBandWithoutArrow = 6;
+
+void PaintOverArrow(HDC hdc, int left, int top, int width, int height) {
+    if (width <= 0 || height <= kMaxBandWithoutArrow) return;
+
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = width;
+    bi.bmiHeader.biHeight = -height;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+
+    HDC hdcBand = CreateCompatibleDC(hdc);
+    if (!hdcBand) return;
+
+    void* bits = nullptr;
+    HBITMAP hBitmap = CreateDIBSection(hdcBand, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!hBitmap) {
+        DeleteDC(hdcBand);
+        return;
+    }
+
+    HGDIOBJ hOldBitmap = SelectObject(hdcBand, hBitmap);
+    BitBlt(hdcBand, 0, 0, width, height, hdc, left, top, SRCCOPY);
+    GdiFlush();
+
+    RecolorArrow(hdc, hdcBand, (DWORD*)bits, left, top, width, height);
+
+    SelectObject(hdcBand, hOldBitmap);
+    DeleteObject(hBitmap);
+    DeleteDC(hdcBand);
+}
+
+// A couple of window manager calls on a menu with no arrows, about a
+// millisecond on one that has them.
+void PaintOverScrollArrows(HWND hWnd, HDC hdcTarget) {
+    // The same rule as the border: the popup may be showing a menu the mod
+    // leaves alone.
+    if (!MenuIsOpen()) return;
+
+    RECT window, client;
+    POINT origin = { 0, 0 };
+    if (!GetWindowRect(hWnd, &window) || !GetClientRect(hWnd, &client) ||
+        !ClientToScreen(hWnd, &origin)) {
+        return;
+    }
+
+    // Without arrows the non-client area is only the frame.
+    int frame = origin.x - window.left;
+    int clientTop = origin.y - window.top;
+    if (clientTop <= frame + kMaxBandWithoutArrow) return;
+
+    // Only a menu Photoshop draws and the mod has stamped. On any other the
+    // arrow is a different shape, and a light one is the right one.
+    HMENU hMenu = (HMENU)SendMessageW(hWnd, MN_GETHMENU, 0, 0);
+    if (!hMenu || !MenuHasOwnerDrawnItems(hMenu) || !MenuHasBackgroundBrush(hMenu)) return;
+
+    HDC hdc = hdcTarget ? hdcTarget : GetWindowDC(hWnd);
+    if (!hdc) return;
+
+    {
+        DepthGuard guard(&tl_ourPaintDepth);
+        int width = window.right - window.left - frame * 2;
+        int windowHeight = window.bottom - window.top;
+        int clientBottom = clientTop + client.bottom;
+        PaintOverArrow(hdc, frame, frame, width, clientTop - frame);
+        PaintOverArrow(hdc, frame, clientBottom, width, windowHeight - frame - clientBottom);
+    }
+
+    if (!hdcTarget) ReleaseDC(hWnd, hdc);
+}
+
 // Undocumented: sent to a window to paint its frame into the DC in wParam.
 constexpr UINT WM_NCUAHDRAWFRAME = 0x00AF;
 
@@ -617,15 +1044,23 @@ WindowKind ClassifyWindow(HWND hWnd) {
     return WindowKind::Other;
 }
 
-bool IsMenuPopupWindow(HWND hWnd) {
-    return ClassifyWindow(hWnd) == WindowKind::MenuPopup;
-}
-
 // The system reuses menu popup windows, so a subclassed popup can still be
 // alive when the mod unloads - and its window procedure would then point into
 // an unloaded DLL. Track them and remove each subclass at uninit.
 std::unordered_set<HWND> g_subclassedPopups;
 std::mutex g_subclassedPopupsMutex;
+
+// MN_SELECTITEM, undocumented: moves the selection in a menu popup. Its wParam
+// is an item position, or one of these two while the pointer is over a scroll
+// arrow.
+constexpr UINT kMenuSelectItem = 0x01E5;
+constexpr UINT kMenuUpArrow = 0xFFFFFFFD;
+constexpr UINT kMenuDownArrow = 0xFFFFFFFC;
+
+// The popup whose scroll arrow the pointer is on, if any. The kernel redraws an
+// arrow when the pointer moves onto it and again when it moves off, with no
+// paint message either time.
+thread_local HWND tl_arrowPopup = nullptr;
 
 // Subclassing the popup rather than watching messages from a hook: WM_PAINT is
 // posted, not sent, so a WH_CALLWNDPROCRET hook never sees it, and a popup that
@@ -636,9 +1071,18 @@ LRESULT CALLBACK MenuPopupSubclassProc(HWND hWnd,
                                        LPARAM lParam,
                                        [[maybe_unused]] DWORD_PTR dwRefData) {
     if (uMsg == WM_NCDESTROY) {
-        std::lock_guard<std::mutex> lock(g_subclassedPopupsMutex);
-        g_subclassedPopups.erase(hWnd);
+        if (tl_arrowPopup == hWnd) tl_arrowPopup = nullptr;
+
+        if (!ProcessIsExiting()) {
+            std::lock_guard<std::mutex> lock(g_subclassedPopupsMutex);
+            g_subclassedPopups.erase(hWnd);
+        }
     }
+
+    // A scroll redraws the arrows and then repaints the rows, and it is the rows
+    // that take the time. Painted over only afterward, the arrows would stay as
+    // the kernel drew them for the whole repaint, which is long enough to be seen.
+    if (uMsg == WM_PAINT) PaintOverScrollArrows(hWnd, nullptr);
 
     LRESULT result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
 
@@ -663,7 +1107,54 @@ LRESULT CALLBACK MenuPopupSubclassProc(HWND hWnd,
             break;
     }
 
+    // The arrows have no paint message of their own: the kernel redraws one in
+    // the middle of a scroll. WM_PAINT follows any scroll, and the rest cover the
+    // routes that run through this window.
+    switch (uMsg) {
+        case WM_PRINT:
+            if (lParam & PRF_NONCLIENT) PaintOverScrollArrows(hWnd, (HDC)wParam);
+            break;
+
+        case WM_PAINT:
+        case WM_NCPAINT:
+        case WM_TIMER:
+        case WM_KEYDOWN:
+        case WM_MOUSEWHEEL:
+        case WM_MOUSEMOVE:
+            PaintOverScrollArrows(hWnd, nullptr);
+            break;
+
+        // Sent on every mouse move, and it only leaves an arrow redrawn when the
+        // pointer has moved onto one or off one. The rest are let through, so a
+        // long menu is not read back for every move of the mouse.
+        case kMenuSelectItem: {
+            bool onArrow = (UINT)wParam == kMenuUpArrow || (UINT)wParam == kMenuDownArrow;
+            HWND hLeft = tl_arrowPopup;
+            tl_arrowPopup = onArrow ? hWnd : nullptr;
+
+            if (onArrow) PaintOverScrollArrows(hWnd, nullptr);
+
+            // The pointer may have left for another popup, and a remembered
+            // handle is only as good as the day it was stored.
+            if (hLeft && (hLeft != hWnd || !onArrow) && ClassifyWindow(hLeft) == WindowKind::MenuPopup) {
+                PaintOverScrollArrows(hLeft, nullptr);
+            }
+            break;
+        }
+    }
+
     return result;
+}
+
+// Records a window that has just been subclassed. Returns false once
+// Wh_ModUninit has begun: it may already have emptied the set and would never
+// come back for this window, so the caller takes the subclass off again.
+bool RecordSubclassed(std::unordered_set<HWND>& windows, std::mutex& mutex, HWND hWnd) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (g_unloading.load(std::memory_order_relaxed)) return false;
+
+    windows.insert(hWnd);
+    return true;
 }
 
 // Subclassed even when Border Color is empty, and regardless of whether a menu
@@ -672,6 +1163,8 @@ LRESULT CALLBACK MenuPopupSubclassProc(HWND hWnd,
 // for the rest of the session. PaintPopupBorder returns immediately when there
 // is no border brush.
 void SubclassPopup(HWND hWnd) {
+    if (ProcessIsExiting() || g_unloading.load(std::memory_order_relaxed)) return;
+
     {
         std::lock_guard<std::mutex> lock(g_subclassedPopupsMutex);
         if (g_subclassedPopups.contains(hWnd)) return;
@@ -680,11 +1173,13 @@ void SubclassPopup(HWND hWnd) {
     // Not subclassed under the lock: from another thread the helper gets there
     // with a SendMessage, and the subclass procedure takes the same lock on
     // WM_NCDESTROY.
-    if (WindhawkUtils::SetWindowSubclassFromAnyThread(hWnd, MenuPopupSubclassProc, 0)) {
-        std::lock_guard<std::mutex> lock(g_subclassedPopupsMutex);
-        g_subclassedPopups.insert(hWnd);
-    } else {
+    if (!WindhawkUtils::SetWindowSubclassFromAnyThread(hWnd, MenuPopupSubclassProc, 0)) {
         Wh_Log(L"Failed to subclass menu popup %p; it keeps the system frame.", hWnd);
+        return;
+    }
+
+    if (!RecordSubclassed(g_subclassedPopups, g_subclassedPopupsMutex, hWnd)) {
+        WindhawkUtils::RemoveWindowSubclassFromAnyThread(hWnd, MenuPopupSubclassProc);
     }
 }
 
@@ -692,26 +1187,58 @@ bool IsComboListWindow(HWND hWnd) {
     return ClassifyWindow(hWnd) == WindowKind::ComboList;
 }
 
+// Only a list whose rows Photoshop paints can be themed. Windows fills a stock
+// list from a brush no hook sees, so recoloring its text would leave light text
+// on white.
+bool IsOwnerDrawnList(HWND hWnd) {
+    return (GetWindowLongPtrW(hWnd, GWL_STYLE) & (LBS_OWNERDRAWFIXED | LBS_OWNERDRAWVARIABLE)) != 0;
+}
+
+// A dropdown's list sits directly on the desktop. The list of a CBS_SIMPLE
+// combo is a child of the combo and part of the dialog around it, so it is left
+// alone too.
+bool IsDropdownList(HWND hWnd) {
+    return GetAncestor(hWnd, GA_PARENT) == GetDesktopWindow();
+}
+
+bool IsThemedList(HWND hWnd) {
+    return IsComboListWindow(hWnd) && IsOwnerDrawnList(hWnd) && IsDropdownList(hWnd);
+}
+
+inline bool IsListPaint(UINT uMsg) {
+    switch (uMsg) {
+        case WM_PAINT:
+        case WM_ERASEBKGND:
+        case WM_NCPAINT:
+        case WM_PRINT:
+        case WM_PRINTCLIENT:
+        case WM_NCUAHDRAWFRAME:
+            return true;
+    }
+    return false;
+}
+
 std::unordered_set<HWND> g_subclassedLists;
 std::mutex g_subclassedListsMutex;
 
-// The whole window procedure is bracketed rather than the paint messages alone.
-// Photoshop owner-draws the items, which arrive as a WM_DRAWITEM sent to the
-// combo's parent from inside the list's own painting, while the fill behind the
-// whole list happens outside any WM_DRAWITEM at all. One flag around the list's
-// message handling covers both - and covers nothing else on the thread, since
-// only this window's messages pass through here.
+// The fill behind the rows happens outside any WM_DRAWITEM, so the list's own
+// paint messages are bracketed here. Only those: a selection sends
+// CBN_SELCHANGE from inside the list's input handling, and whatever Photoshop
+// reads or repaints in response has to see the real system colors. The rows are
+// bracketed separately in CallWndProcHook, which also covers a row repainted on
+// hover.
 LRESULT CALLBACK ComboListSubclassProc(HWND hWnd,
                                        UINT uMsg,
                                        WPARAM wParam,
                                        LPARAM lParam,
                                        [[maybe_unused]] DWORD_PTR dwRefData) {
-    if (uMsg == WM_NCDESTROY) {
+    if (uMsg == WM_NCDESTROY && !ProcessIsExiting()) {
         std::lock_guard<std::mutex> lock(g_subclassedListsMutex);
         g_subclassedLists.erase(hWnd);
     }
 
-    if (!g_themeDropdowns.load(std::memory_order_relaxed)) {
+    if (!IsListPaint(uMsg) || !g_themeDropdowns.load(std::memory_order_relaxed) ||
+        !IsDropdownList(hWnd)) {
         return DefSubclassProc(hWnd, uMsg, wParam, lParam);
     }
 
@@ -722,26 +1249,42 @@ LRESULT CALLBACK ComboListSubclassProc(HWND hWnd,
 // Subclassed whatever the setting says, for the same reason the popups are: the
 // list window is created once and reused, so a list skipped here would stay
 // light for the rest of the session if the setting were turned on later.
+// Dropdown or not is checked at paint time, because a list has not been moved
+// to the desktop yet when the CBT hook sees it.
 void SubclassComboList(HWND hWnd) {
+    if (ProcessIsExiting() || g_unloading.load(std::memory_order_relaxed) || !IsOwnerDrawnList(hWnd)) {
+        return;
+    }
+
     {
         std::lock_guard<std::mutex> lock(g_subclassedListsMutex);
         if (g_subclassedLists.contains(hWnd)) return;
     }
 
-    if (WindhawkUtils::SetWindowSubclassFromAnyThread(hWnd, ComboListSubclassProc, 0)) {
-        {
-            std::lock_guard<std::mutex> lock(g_subclassedListsMutex);
-            g_subclassedLists.insert(hWnd);
-        }
-        Wh_Log(L"Subclassed dropdown list %p.", hWnd);
-
-        // A list is usually found in the middle of the paint that revealed it,
-        // by which point the system has already filled its background. Ask for
-        // one more paint so the fill lands in the mod's color straight away
-        // rather than on the next time the list is opened.
-        InvalidateRect(hWnd, nullptr, TRUE);
-    } else {
+    if (!WindhawkUtils::SetWindowSubclassFromAnyThread(hWnd, ComboListSubclassProc, 0)) {
         Wh_Log(L"Failed to subclass dropdown list %p; it keeps the system colors.", hWnd);
+        return;
+    }
+
+    if (!RecordSubclassed(g_subclassedLists, g_subclassedListsMutex, hWnd)) {
+        WindhawkUtils::RemoveWindowSubclassFromAnyThread(hWnd, ComboListSubclassProc);
+        return;
+    }
+
+    Wh_Log(L"Subclassed dropdown list %p.", hWnd);
+
+    // A list is usually found in the middle of the paint that revealed it, by
+    // which point the system has already filled its background. Ask for one
+    // more paint so the fill lands in the mod's color straight away rather than
+    // on the next time the list is opened.
+    InvalidateRect(hWnd, nullptr, TRUE);
+}
+
+void SubclassIfKnown(HWND hWnd) {
+    switch (ClassifyWindow(hWnd)) {
+        case WindowKind::MenuPopup: SubclassPopup(hWnd); break;
+        case WindowKind::ComboList: SubclassComboList(hWnd); break;
+        case WindowKind::Other:     break;
     }
 }
 
@@ -749,29 +1292,49 @@ void SubclassComboList(HWND hWnd) {
 // user32 creates both for itself, so nothing exported sees them appear - only a
 // CBT hook does.
 LRESULT CALLBACK CbtProcHook(int code, WPARAM wParam, LPARAM lParam) {
-    if (code == HCBT_CREATEWND) {
-        HWND hWnd = (HWND)wParam;
-        switch (ClassifyWindow(hWnd)) {
-            case WindowKind::MenuPopup: SubclassPopup(hWnd); break;
-            case WindowKind::ComboList: SubclassComboList(hWnd); break;
-            case WindowKind::Other:     break;
-        }
-    }
+    if (code == HCBT_CREATEWND) SubclassIfKnown((HWND)wParam);
     return CallNextHookEx(nullptr, code, wParam, lParam);
 }
 
-// Threads whose CBT hook is up. Keyed globally rather than by a thread_local so
-// the hook can also be installed for a thread from outside it, which is what
-// Wh_ModAfterInit does for a Photoshop that is already running.
+// A thread whose hooks are up. Unlike the mod's function hooks, SetWindowsHookEx
+// hooks are not removed by the Windhawk engine, and their procedures live in the
+// mod image, so each one is kept to be released at uninit.
 //
-// Each entry holds the thread open, which is the only way to tell the thread
-// that was hooked from a later one that inherited its id. Windows recycles
-// thread ids and Photoshop churns worker threads, so without the handle a new
-// UI thread landing on a dead one's id would be waved through with nothing
-// installed - and stay that way, silently, since nothing else raises
-// tl_menuDrawDepth and the thread's menus would simply never be themed.
-std::unordered_map<DWORD, HANDLE> g_hookedThreads;
+// The handle holds the thread open, because Windows does not reuse a thread's
+// id while a handle to it is open. Photoshop churns threads, so without it a
+// new UI thread landing on a dead one's id would count as hooked and its menus
+// would never be themed.
+struct HookedThread {
+    HANDLE hThread = nullptr;
+    HHOOK hCwpRet = nullptr;
+    HHOOK hCwp = nullptr;
+    HHOOK hCbt = nullptr;
+};
+
+// Global so that Wh_ModAfterInit can hook a thread from outside it, and so that
+// Wh_ModUninit, which never runs on the thread that installed them, can take the
+// hooks down again: UnhookWindowsHookEx works from any thread. Bounded by the
+// number of UI threads alive.
+std::unordered_map<DWORD, HookedThread> g_hookedThreads;
 std::mutex g_hookedThreadsMutex;
+
+void RemoveThreadHooks(const HookedThread& thread) {
+    if (thread.hCwpRet) UnhookWindowsHookEx(thread.hCwpRet);
+    if (thread.hCwp) UnhookWindowsHookEx(thread.hCwp);
+    if (thread.hCbt) UnhookWindowsHookEx(thread.hCbt);
+}
+
+// Windows frees a thread's hooks when the thread exits, so only its handle is
+// left to release. Called with g_hookedThreadsMutex held.
+void ForgetExitedThreads() {
+    std::erase_if(g_hookedThreads, [](const auto& entry) {
+        HANDLE hThread = entry.second.hThread;
+        if (!hThread || WaitForSingleObject(hThread, 0) != WAIT_OBJECT_0) return false;
+
+        CloseHandle(hThread);
+        return true;
+    });
+}
 
 LRESULT CALLBACK CallWndProcHook(int code, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK CallWndRetProcHook(int code, WPARAM wParam, LPARAM lParam);
@@ -781,32 +1344,31 @@ LRESULT CALLBACK CallWndRetProcHook(int code, WPARAM wParam, LPARAM lParam);
 // kept for the life of the process - most of them before this mod ever loaded -
 // so the only thing that reliably identifies one is the painting itself.
 // Returns whether the thread is now recorded as hooked, which is false only
-// when every hook failed and the thread was given back for a later retry.
+// when every hook failed and a later paint should retry.
 bool InstallThreadHook(DWORD tid) {
-    // Opened before the lock is taken, since it is only ever needed to answer a
-    // question about an entry that already exists.
+    if (ProcessIsExiting()) return true;
+
+    {
+        std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
+        if (g_unloading.load(std::memory_order_relaxed) || g_hookedThreads.contains(tid)) return true;
+    }
+
+    // A thread whose handle cannot be opened is still recorded, since
+    // reinstalling on every call would be worse than the id reuse the handle
+    // guards against.
     HANDLE hThread = OpenThread(SYNCHRONIZE, FALSE, tid);
 
     {
         std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
+        ForgetExitedThreads();
 
-        auto it = g_hookedThreads.find(tid);
-        if (it != g_hookedThreads.end()) {
-            // A recorded thread with no handle behind it is trusted the way it
-            // used to be: there is nothing to test it against, and reinstalling
-            // on every call would be worse than the recycled id it guards.
-            if (!it->second || WaitForSingleObject(it->second, 0) == WAIT_TIMEOUT) {
-                if (hThread) CloseHandle(hThread);
-                return true;
-            }
-
-            // The recorded thread has exited, so this id has come round to a new
-            // one and the hooks went with the old thread. Install for this one.
-            CloseHandle(it->second);
-            g_hookedThreads.erase(it);
+        // Two callers can reach this point for one thread: the thread itself
+        // from a color hook, and the engine's thread from Wh_ModAfterInit.
+        if (g_unloading.load(std::memory_order_relaxed) ||
+            !g_hookedThreads.try_emplace(tid, HookedThread{ hThread }).second) {
+            if (hThread) CloseHandle(hThread);
+            return true;
         }
-
-        g_hookedThreads.emplace(tid, hThread);
     }
 
     // The closing hook goes up before the opening one, never the other way
@@ -816,8 +1378,8 @@ bool InstallThreadHook(DWORD tid) {
     // nothing resets it the way LeaveMenu resets the menu counter. The color
     // hooks read that counter on its own, with no window class to fall back on,
     // so the whole thread would then paint in the mod's colors for the rest of
-    // the session. In this order the odd message out closes a bracket that was
-    // never opened, which the > 0 guards in the return hook already absorb.
+    // the session. In this order the odd message out closes a draw that was
+    // never recorded, which the return hook ignores.
     //
     // Each error is taken next to its own call. A later success does not clear
     // the last error, so one reading taken after all three can just as easily
@@ -831,9 +1393,34 @@ bool InstallThreadHook(DWORD tid) {
     HHOOK hCbt = SetWindowsHookExW(WH_CBT, CbtProcHook, nullptr, tid);
     DWORD errCbt = hCbt ? 0 : GetLastError();
 
-    TrackWinHook(hCwpRet);
-    TrackWinHook(hCwp);
-    TrackWinHook(hCbt);
+    // Nothing went up, so let a later paint on this thread try again rather
+    // than leaving the thread recorded as hooked when it is not. A partial
+    // failure keeps what it got: retrying would only add a second copy of the
+    // hooks that did install.
+    bool retry = !hCwpRet && !hCwp && !hCbt;
+
+    // The entry is gone if the thread has exited, or if Wh_ModUninit emptied the
+    // map in the meantime. Either way nothing would take these hooks down later.
+    bool recorded = false;
+    {
+        std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
+        auto it = g_hookedThreads.find(tid);
+        if (it != g_hookedThreads.end()) {
+            recorded = true;
+            if (retry) {
+                if (it->second.hThread) CloseHandle(it->second.hThread);
+                g_hookedThreads.erase(it);
+            } else {
+                it->second.hCwpRet = hCwpRet;
+                it->second.hCwp = hCwp;
+                it->second.hCbt = hCbt;
+            }
+        }
+    }
+    if (!recorded) {
+        RemoveThreadHooks(HookedThread{ nullptr, hCwpRet, hCwp, hCbt });
+        return true;
+    }
 
     if (hCwpRet && hCwp && hCbt) {
         Wh_Log(L"Hooked thread %u.", tid);
@@ -844,21 +1431,7 @@ bool InstallThreadHook(DWORD tid) {
            L"and dropdowns fall back to the system colors.",
            tid, errCwpRet, errCwp, errCbt);
 
-    // Nothing went up, so let a later paint on this thread try again rather
-    // than leaving the thread recorded as hooked when it is not. A partial
-    // failure keeps what it got: retrying would only add a second copy of the
-    // hooks that did install.
-    if (!hCwpRet && !hCwp && !hCbt) {
-        std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
-        auto it = g_hookedThreads.find(tid);
-        if (it != g_hookedThreads.end()) {
-            if (it->second) CloseHandle(it->second);
-            g_hookedThreads.erase(it);
-        }
-        return false;
-    }
-
-    return true;
+    return !retry;
 }
 
 // Called from the color hooks, which any thread that paints reaches early. The
@@ -882,23 +1455,12 @@ void EnsureThreadHooks() {
     // Windows this thread already has, which the CBT hook by definition never
     // sees. Both kinds are cached and reused by the system, so one that existed
     // before the mod loaded would never be revisited - which is the usual case,
-    // since a mod is normally first enabled in a Photoshop already in use.
+    // since a mod is normally first enabled in a Photoshop already in use. A
+    // dropdown's list sits on the desktop, so this enumeration reaches it.
     int windows = 0;
     EnumThreadWindows(GetCurrentThreadId(), [](HWND hWnd, LPARAM lParam) WINAPI -> BOOL {
         (*(int*)lParam)++;
-        if (IsMenuPopupWindow(hWnd)) {
-            SubclassPopup(hWnd);
-        }
-
-        // A combo's list is created as a child window and only becomes a popup
-        // when it drops down, so EnumThreadWindows - which enumerates non-child
-        // windows only - would never reach one that already exists.
-        EnumChildWindows(hWnd, [](HWND hChild, LPARAM) WINAPI -> BOOL {
-            if (IsComboListWindow(hChild)) {
-                SubclassComboList(hChild);
-            }
-            return TRUE;
-        }, 0);
+        SubclassIfKnown(hWnd);
         return TRUE;
     }, (LPARAM)&windows);
 
@@ -929,19 +1491,18 @@ bool IsMenuItemDraw(const DRAWITEMSTRUCT* di) {
 // leave light on light.
 //
 // The closed combo field arrives as a list draw too, marked ODS_COMBOBOXEDIT.
-// Photoshop paints that one in its own colors and it already looks right.
+// Photoshop paints that one in its own colors and it already looks right. The
+// rows of a CBS_SIMPLE combo, whose list is always open inside its dialog, are
+// left alone as well.
 //
-// Both the opening and the closing hook go through here, but that is not quite
-// symmetry by construction: the ODT_LISTBOX arm ends in a live class lookup, so
-// the two agree only while the window manager keeps answering the same way. The
-// list would have to be destroyed inside its own WM_DRAWITEM to break it. Worth
-// knowing because tl_comboListDepth is the one counter with nothing behind it -
-// tl_menuDrawDepth is reset in LeaveMenu, so a mismatch there is corrected on
-// the next menu, while a mismatch here would stick for the life of the thread.
+// Only the opening hook asks this. The closing hook goes by what was recorded
+// then, since the answer can change while the row is drawn. See tl_drawKinds.
 bool IsListItemDraw(const DRAWITEMSTRUCT* di) {
     if (di->itemState & ODS_COMBOBOXEDIT) return false;
-    if (di->CtlType == ODT_COMBOBOX) return true;
-    return di->CtlType == ODT_LISTBOX && IsComboListWindow(di->hwndItem);
+    if (di->CtlType == ODT_COMBOBOX) {
+        return (GetWindowLongPtrW(di->hwndItem, GWL_STYLE) & CBS_DROPDOWNLIST) != CBS_SIMPLE;
+    }
+    return di->CtlType == ODT_LISTBOX && IsThemedList(di->hwndItem);
 }
 
 // Not every row's text color is asked for. Some of Photoshop's list drawing
@@ -973,11 +1534,24 @@ LRESULT CALLBACK CallWndProcHook(int code, WPARAM wParam, LPARAM lParam) {
     if (cwp->message == WM_DRAWITEM && cwp->lParam) {
         auto* di = (const DRAWITEMSTRUCT*)cwp->lParam;
 
-        // Menu items stay scoped to a menu this mod is tracking, so a menu it
-        // deliberately leaves alone is not half-themed.
-        if (IsMenuItemDraw(di) && MenuIsOpen()) {
+        // Past the end of the record, a draw is left alone rather than counted
+        // with nothing to say how to uncount it.
+        DrawKind kind = DrawKind::Other;
+        if (tl_drawNesting < kMaxNestedDraws) {
+            // Menu items stay scoped to a menu this mod is tracking, so a menu
+            // it deliberately leaves alone is not half-themed.
+            if (IsMenuItemDraw(di) && MenuIsOpen()) {
+                kind = DrawKind::Menu;
+            } else if (IsListItemDraw(di) && g_themeDropdowns.load(std::memory_order_relaxed)) {
+                kind = DrawKind::List;
+            }
+            tl_drawKinds[tl_drawNesting] = kind;
+        }
+        tl_drawNesting++;
+
+        if (kind == DrawKind::Menu) {
             tl_menuDrawDepth++;
-        } else if (IsListItemDraw(di) && g_themeDropdowns.load(std::memory_order_relaxed)) {
+        } else if (kind == DrawKind::List) {
             tl_comboListDepth++;
             // On the inner draw hwndItem is the list itself, which is how the
             // mod finds a list it never saw created; on the outer one it is the
@@ -1005,21 +1579,41 @@ LRESULT CALLBACK CallWndRetProcHook(int code, WPARAM wParam, LPARAM lParam) {
 
     auto* ret = (CWPRETSTRUCT*)lParam;
 
+    // Just before a window is shown its frame is final and nothing of it is on
+    // screen. This also reaches dialogs, which user32 creates without the
+    // exported CreateWindowExW. The second message covers a show that skips the
+    // first. A frame paint is the catch-all, for a window that was skipped while
+    // minimized or that was already showing when its thread was hooked.
+    if (ret->message == WM_WINDOWPOSCHANGING || ret->message == WM_WINDOWPOSCHANGED) {
+        if (ret->lParam && (((const WINDOWPOS*)ret->lParam)->flags & SWP_SHOWWINDOW)) {
+            ApplyTitleBar(ret->hwnd);
+        }
+    } else if (ret->message == WM_NCACTIVATE || ret->message == WM_NCPAINT) {
+        ApplyTitleBar(ret->hwnd);
+    } else if (ret->message == WM_NCDESTROY) {
+        ForgetTitleBar(ret->hwnd);
+    }
+
     if (ret->message == WM_INITMENUPOPUP) {
         // Only for a menu going up through TrackPopupMenu(Ex): stamping every
         // menu in the process would darken the background of ones whose text the
         // system paints, leaving them dark on dark.
         if (MenuIsOpen()) ApplyMenuBackground((HMENU)ret->wParam);
     } else if (ret->message == WM_DRAWITEM && ret->lParam) {
-        auto* di = (const DRAWITEMSTRUCT*)ret->lParam;
-        if (IsMenuItemDraw(di)) {
-            if (tl_menuDrawDepth > 0) tl_menuDrawDepth--;
-        } else if (IsListItemDraw(di)) {
-            if (tl_comboListDepth > 0) tl_comboListDepth--;
+        // Nothing is recorded for a draw that began before the opening hook was up.
+        if (tl_drawNesting > 0) {
+            tl_drawNesting--;
+            DrawKind kind = tl_drawNesting < kMaxNestedDraws ? tl_drawKinds[tl_drawNesting]
+                                                             : DrawKind::Other;
+            if (kind == DrawKind::Menu) {
+                if (tl_menuDrawDepth > 0) tl_menuDrawDepth--;
+            } else if (kind == DrawKind::List) {
+                if (tl_comboListDepth > 0) tl_comboListDepth--;
+            }
         }
     } else if (ret->message == WM_CTLCOLORLISTBOX &&
                g_themeDropdowns.load(std::memory_order_relaxed) &&
-               IsComboListWindow((HWND)ret->lParam)) {
+               IsThemedList((HWND)ret->lParam)) {
         // The same DC, prepared for whatever the list paints outside a row -
         // and done after the parent has answered, so it is the mod's colors
         // that stand.
@@ -1085,7 +1679,12 @@ HWND WINAPI CreateWindowExW_Hook(DWORD exStyle, PCWSTR className, PCWSTR windowN
     HWND hWnd = CreateWindowExW_Original(exStyle, className, windowName, style,
                                          x, y, width, height, hParent, hMenu,
                                          hInstance, lpParam);
-    if (hWnd) EnsureThreadHooks();
+    if (hWnd) {
+        EnsureThreadHooks();
+        // A thread's first window can be on screen by the time its message
+        // hooks go up.
+        if (IsWindowVisible(hWnd)) ApplyTitleBar(hWnd);
+    }
     return hWnd;
 }
 
@@ -1179,15 +1778,100 @@ BOOL WINAPI PatBlt_Hook(HDC hdc, int x, int y, int w, int h, DWORD rop) {
     return PatBlt_Original(hdc, x, y, w, h, rop);
 }
 
+// A menu Photoshop sets its own background on would put the theme's light text
+// on it, or leave a strip of the theme's gutter beside it, once the menu is in
+// the dark theme. Clearing the background hands the whole popup back to the
+// theme. The mod's own stamp passes through untouched, and so does a menu
+// having its background cleared.
+decltype(&SetMenuInfo) SetMenuInfo_Original;
+BOOL WINAPI SetMenuInfo_Hook(HMENU hMenu, LPCMENUINFO pInfo) {
+    if (pInfo && pInfo->cbSize == sizeof(MENUINFO) && (pInfo->fMask & MIM_BACKGROUND) &&
+        pInfo->hbrBack && pInfo->hbrBack != g_hMenuBrush.load(std::memory_order_acquire) &&
+        g_darkMenusActive.load(std::memory_order_relaxed)) {
+        MENUINFO replaced = *pInfo;
+        replaced.hbrBack = nullptr;
+        return SetMenuInfo_Original(hMenu, &replaced);
+    }
+    return SetMenuInfo_Original(hMenu, pInfo);
+}
+
+// ---------------------------------------------------------------------------
+// Menus Windows draws
+// ---------------------------------------------------------------------------
+
+// A few of Photoshop's menus are left to Windows, which paints them through the
+// theme engine: the context menu on a document tab or a panel tab, for one.
+// uxtheme has a dark variant of that drawing behind two exports with an ordinal
+// and no name. Ordinal 135 is a different function before Windows 10 1903,
+// hence the version check. The technique comes from the dark-menus mod.
+enum class PreferredAppMode { Default, AllowDark, ForceDark, ForceLight, Max };
+using SetPreferredAppMode_t = PreferredAppMode(WINAPI*)(PreferredAppMode);
+using FlushMenuThemes_t = void(WINAPI*)();
+
+constexpr WORD kOrdinalSetPreferredAppMode = 135;
+constexpr WORD kOrdinalFlushMenuThemes = 136;
+constexpr DWORD kFirstBuildWithPreferredAppMode = 18362;
+
+HMODULE g_hUxtheme = nullptr;
+SetPreferredAppMode_t g_pSetPreferredAppMode = nullptr;
+FlushMenuThemes_t g_pFlushMenuThemes = nullptr;
+PreferredAppMode g_previousAppMode = PreferredAppMode::Default;
+
+void ResolveDarkMenuApis() {
+    using RtlGetVersion_t = LONG(WINAPI*)(RTL_OSVERSIONINFOW*);
+    auto pRtlGetVersion =
+        (RtlGetVersion_t)(void*)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
+
+    RTL_OSVERSIONINFOW version = {};
+    version.dwOSVersionInfoSize = sizeof(version);
+    if (!pRtlGetVersion || pRtlGetVersion(&version) != 0 ||
+        version.dwBuildNumber < kFirstBuildWithPreferredAppMode) {
+        Wh_Log(L"Windows build too old for dark menus; menus Windows draws stay light.");
+        return;
+    }
+
+    g_hUxtheme = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!g_hUxtheme) return;
+
+    g_pSetPreferredAppMode = (SetPreferredAppMode_t)(void*)GetProcAddress(
+        g_hUxtheme, MAKEINTRESOURCEA(kOrdinalSetPreferredAppMode));
+    g_pFlushMenuThemes = (FlushMenuThemes_t)(void*)GetProcAddress(
+        g_hUxtheme, MAKEINTRESOURCEA(kOrdinalFlushMenuThemes));
+}
+
+// The flush applies the change to a running Photoshop, which otherwise keeps the
+// menu theme it already opened.
+void ApplyDarkMenus() {
+    if (!g_pSetPreferredAppMode || !g_pFlushMenuThemes) return;
+
+    bool want = g_themeWindowsMenus.load(std::memory_order_relaxed);
+    if (want == g_darkMenusActive.load(std::memory_order_relaxed)) return;
+
+    if (want) {
+        g_previousAppMode = g_pSetPreferredAppMode(PreferredAppMode::ForceDark);
+    } else {
+        g_pSetPreferredAppMode(g_previousAppMode);
+    }
+    g_pFlushMenuThemes();
+
+    g_darkMenusActive.store(want, std::memory_order_relaxed);
+}
+
 // ---------------------------------------------------------------------------
 // Windhawk events
 // ---------------------------------------------------------------------------
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
+    ApplyDarkMenus();
+    SyncTitleBars();
 }
 
 BOOL Wh_ModInit() {
+    // No header or import library has it, so it is looked up. See ProcessIsExiting.
+    g_pRtlDllShutdownInProgress = (RtlDllShutdownInProgress_t)(void*)GetProcAddress(
+        GetModuleHandleW(L"ntdll.dll"), "RtlDllShutdownInProgress");
+
     LoadSettings();
 
     // Every other hook failing degrades the result: a menu themed less
@@ -1213,12 +1897,18 @@ BOOL Wh_ModInit() {
     if (!WindhawkUtils::SetFunctionHook(FillRect, FillRect_Hook, &FillRect_Original)) Wh_Log(L"Failed to hook FillRect");
     if (!WindhawkUtils::SetFunctionHook(PatBlt, PatBlt_Hook, &PatBlt_Original)) Wh_Log(L"Failed to hook PatBlt");
     if (!WindhawkUtils::SetFunctionHook(CreateWindowExW, CreateWindowExW_Hook, &CreateWindowExW_Original)) Wh_Log(L"Failed to hook CreateWindowExW");
+    if (!WindhawkUtils::SetFunctionHook(SetMenuInfo, SetMenuInfo_Hook, &SetMenuInfo_Original)) Wh_Log(L"Failed to hook SetMenuInfo");
 
     if (!menuEntryHooked) {
         Wh_Log(L"Neither TrackPopupMenu nor TrackPopupMenuEx could be hooked; "
                L"there is nothing the mod could theme.");
         return FALSE;
     }
+
+    // Only once the mod is sure to load: Wh_ModUninit is not called after a
+    // FALSE return, and nothing else would put the process back.
+    ResolveDarkMenuApis();
+    ApplyDarkMenus();
 
     return TRUE;
 }
@@ -1244,31 +1934,37 @@ void Wh_ModAfterInit() {
         if (tid && pid == GetCurrentProcessId()) InstallThreadHook(tid);
         return TRUE;
     }, 0);
+
+    SyncTitleBars();
 }
 
 void Wh_ModUninit() {
-    // The message hooks belong to whichever Photoshop thread had a menu up, not
-    // to this one, so they are released through the global set - see g_winHooks.
-    {
-        std::vector<HHOOK> hooks;
-        {
-            std::lock_guard<std::mutex> lock(g_winHooksMutex);
-            hooks.assign(g_winHooks.begin(), g_winHooks.end());
-            g_winHooks.clear();
-        }
-        for (HHOOK hHook : hooks) {
-            UnhookWindowsHookEx(hHook);
-        }
-    }
+    // Before anything is taken down, so that nothing new goes up behind it.
+    g_unloading.store(true, std::memory_order_relaxed);
 
-    // The thread handles are held only to tell a hooked thread from a later one
-    // that inherited its id, and the hooks they described are now gone.
+    // Back to whatever mode the process was in, with no restart needed.
+    g_themeWindowsMenus.store(false, std::memory_order_relaxed);
+    ApplyDarkMenus();
+    if (g_hUxtheme) FreeLibrary(g_hUxtheme);
+
+    // Switched off first, or a window repainting in the meantime would come back
+    // through ApplyTitleBar and be left dark.
+    g_themeTitleBars.store(false, std::memory_order_relaxed);
+    RestoreTitleBars();
+
+    // The message hooks belong to Photoshop's UI threads, not to this one, so
+    // they are released through the global map. See HookedThread.
     {
-        std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
-        for (const auto& entry : g_hookedThreads) {
-            if (entry.second) CloseHandle(entry.second);
+        std::vector<HookedThread> threads;
+        {
+            std::lock_guard<std::mutex> lock(g_hookedThreadsMutex);
+            for (const auto& entry : g_hookedThreads) threads.push_back(entry.second);
+            g_hookedThreads.clear();
         }
-        g_hookedThreads.clear();
+        for (const HookedThread& thread : threads) {
+            RemoveThreadHooks(thread);
+            if (thread.hThread) CloseHandle(thread.hThread);
+        }
     }
 
     // Not WindhawkUtils::RemoveAllWindowSubclasses(), which needs Windhawk 1.8.
